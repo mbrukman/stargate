@@ -21,7 +21,6 @@ import io.netty.buffer.ByteBuf;
 import io.stargate.db.AuthenticatedUser;
 import io.stargate.db.Authenticator;
 import io.stargate.db.Persistence;
-import io.stargate.db.QueryState;
 import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
 import org.apache.cassandra.exceptions.AuthenticationException;
@@ -69,14 +68,13 @@ public class AuthResponse extends Message.Request {
 
   @Override
   protected CompletableFuture<? extends Response> execute(
-      Persistence persistence, QueryState state, long queryStartNanoTime) {
+      Persistence persistence, long queryStartNanoTime) {
     try {
-      Authenticator.SaslNegotiator negotiator =
-          ((ServerConnection) connection).getSaslNegotiator(state);
+      Authenticator.SaslNegotiator negotiator = ((ServerConnection) connection).getSaslNegotiator();
       byte[] challenge = negotiator.evaluateResponse(token);
       if (negotiator.isComplete()) {
         AuthenticatedUser<?> user = negotiator.getAuthenticatedUser();
-        state.getClientState().login(user);
+        getClientState().login(user);
         ClientMetrics.instance.markAuthSuccess();
         // authentication is complete, send a ready message to the client
         return CompletableFuture.completedFuture(new AuthSuccess(challenge));

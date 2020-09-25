@@ -38,8 +38,8 @@ import io.stargate.auth.AuthenticationService;
 import io.stargate.auth.StoredCredentials;
 import io.stargate.auth.UnauthorizedException;
 import io.stargate.db.ClientState;
+import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
-import io.stargate.db.QueryState;
 import io.stargate.db.datastore.DataStore;
 import io.stargate.db.datastore.ResultSet;
 import io.stargate.db.datastore.Row;
@@ -90,8 +90,7 @@ public class DataFetchers {
       String token = httpAwareContext.getAuthToken();
       StoredCredentials storedCredentials = authenticationService.validateToken(token);
       ClientState clientState = persistence.newClientState(storedCredentials.getRoleName());
-      QueryState queryState = persistence.newQueryState(clientState);
-      DataStore dataStore = persistence.newDataStore(queryState, null);
+      DataStore dataStore = persistence.newDataStore(Parameters.defaultWith(clientState));
 
       String statement = buildStatement(table, environment, dataStore);
       return dataStore
@@ -282,8 +281,7 @@ public class DataFetchers {
       String token = httpAwareContext.getAuthToken();
       StoredCredentials storedCredentials = authenticationService.validateToken(token);
       ClientState clientState = persistence.newClientState(storedCredentials.getRoleName());
-      QueryState queryState = persistence.newQueryState(clientState);
-      DataStore dataStore = persistence.newDataStore(queryState, null);
+      DataStore dataStore = persistence.newDataStore(Parameters.defaultWith(clientState));
 
       CompletableFuture<ResultSet> rs = dataStore.query(statement);
       ResultSet resultSet = rs.get();
@@ -300,11 +298,11 @@ public class DataFetchers {
       List<Column> defs = row.columns();
       Map<String, Object> map = new HashMap<>(defs.size());
       for (Column column : defs) {
-        if (row.has(column)) {
+        if (!row.isNull(column.name())) {
           Column columnMetadata = table.column(column.name());
           map.put(
               nameMapping.getColumnName(table).get(columnMetadata),
-              transformObjectToJavaObject(row.getValue(column.name())));
+              transformObjectToJavaObject(row.getObject(column.name())));
         }
       }
       return map;

@@ -80,7 +80,7 @@ public class PlainTextTokenSaslNegotiatorTest {
     AuthenticationService authentication = mock(AuthenticationService.class);
     when(authentication.validateToken(TOKEN)).thenReturn(credentials);
 
-    Persistence<?, ?, ?> persistence = mock(Persistence.class);
+    Persistence<?, ?> persistence = mock(Persistence.class);
     when((AuthenticatedUser) persistence.newAuthenticatedUser(ROLE))
         .thenReturn(newAuthenticatorUser(ROLE));
 

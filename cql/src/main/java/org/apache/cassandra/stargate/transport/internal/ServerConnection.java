@@ -24,7 +24,6 @@ import io.stargate.auth.AuthenticationService;
 import io.stargate.db.Authenticator;
 import io.stargate.db.ClientState;
 import io.stargate.db.Persistence;
-import io.stargate.db.QueryState;
 import javax.net.ssl.SSLPeerUnverifiedException;
 import javax.security.cert.X509Certificate;
 import org.apache.cassandra.stargate.transport.ProtocolException;
@@ -70,7 +69,7 @@ public class ServerConnection extends Connection {
     return stage;
   }
 
-  QueryState validateNewMessage(Message.Type type, ProtocolVersion version) {
+  void validateNewMessage(Message.Type type, ProtocolVersion version) {
     switch (stage) {
       case ESTABLISHED:
         if (type != Message.Type.STARTUP && type != Message.Type.OPTIONS)
@@ -93,8 +92,6 @@ public class ServerConnection extends Connection {
       default:
         throw new AssertionError();
     }
-
-    return persistence.newQueryState(clientState);
   }
 
   void applyStateTransition(Message.Type requestType, Message.Type responseType) {
@@ -122,12 +119,12 @@ public class ServerConnection extends Connection {
     }
   }
 
-  public Authenticator.SaslNegotiator getSaslNegotiator(QueryState queryState) {
+  public Authenticator.SaslNegotiator getSaslNegotiator() {
     if (saslNegotiator == null) {
       Authenticator.SaslNegotiator negotiator =
           persistence
               .getAuthenticator()
-              .newSaslNegotiator(queryState.getClientAddress(), certificates());
+              .newSaslNegotiator(getClientState().getRemoteAddress().getAddress(), certificates());
 
       saslNegotiator =
           authentication == null

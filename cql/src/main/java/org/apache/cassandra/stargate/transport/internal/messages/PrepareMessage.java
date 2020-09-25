@@ -19,7 +19,6 @@ package org.apache.cassandra.stargate.transport.internal.messages;
 
 import io.netty.buffer.ByteBuf;
 import io.stargate.db.Persistence;
-import io.stargate.db.QueryState;
 import io.stargate.db.Result;
 import java.util.concurrent.CompletableFuture;
 import org.apache.cassandra.stargate.transport.ProtocolVersion;
@@ -81,9 +80,8 @@ public class PrepareMessage extends Message.Request {
 
   @Override
   protected CompletableFuture<? extends Response> execute(
-      Persistence persistence, QueryState state, long queryStartNanoTime) {
-    CompletableFuture<? extends Result> future =
-        persistence.prepare(query, state, getCustomPayload(), isTracingRequested());
+      Persistence persistence, long queryStartNanoTime) {
+    CompletableFuture<? extends Result> future = persistence.prepare(query, makeParameters());
     return future.thenApply(result -> new ResultMessage(result));
   }
 

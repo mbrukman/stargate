@@ -20,7 +20,6 @@ package org.apache.cassandra.stargate.transport.internal.messages;
 import io.netty.buffer.ByteBuf;
 import io.stargate.db.ClientState;
 import io.stargate.db.Persistence;
-import io.stargate.db.QueryState;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -70,7 +69,7 @@ public class StartupMessage extends Message.Request {
 
   @Override
   protected CompletableFuture<? extends Response> execute(
-      Persistence persistence, QueryState state, long queryStartNanoTime) {
+      Persistence persistence, long queryStartNanoTime) {
     String cqlVersion = options.get(CQL_VERSION);
     if (cqlVersion == null)
       throw new ProtocolException("Missing value CQL_VERSION in STARTUP message");
@@ -101,7 +100,7 @@ public class StartupMessage extends Message.Request {
 
     connection.setThrowOnOverload("1".equals(options.get(THROW_ON_OVERLOAD)));
 
-    ClientState clientState = state.getClientState();
+    ClientState clientState = getClientState();
     String driverName = options.get(DRIVER_NAME);
     if (null != driverName) {
       clientState.setDriverName(driverName);

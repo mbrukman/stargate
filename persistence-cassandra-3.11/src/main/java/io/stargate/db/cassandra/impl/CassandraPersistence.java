@@ -15,51 +15,45 @@
  */
 package io.stargate.db.cassandra.impl;
 
-import static io.stargate.db.cassandra.datastore.InternalDataStore.EXECUTOR;
+import static org.apache.cassandra.concurrent.SharedExecutorPool.SHARED;
 
-import com.datastax.oss.driver.shaded.guava.common.base.Strings;
-import com.google.common.collect.ImmutableMap;
+import com.google.common.base.Strings;
 import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.Uninterruptibles;
 import io.stargate.db.Authenticator;
-import io.stargate.db.BatchType;
+import io.stargate.db.Batch;
+import io.stargate.db.BoundStatement;
 import io.stargate.db.ClientState;
 import io.stargate.db.EventListener;
-import io.stargate.db.QueryOptions;
-import io.stargate.db.QueryState;
+import io.stargate.db.Parameters;
 import io.stargate.db.Result;
-import io.stargate.db.cassandra.datastore.InternalDataStore;
+import io.stargate.db.SimpleStatement;
+import io.stargate.db.Statement;
 import io.stargate.db.cassandra.impl.interceptors.DefaultQueryInterceptor;
 import io.stargate.db.cassandra.impl.interceptors.QueryInterceptor;
-import io.stargate.db.datastore.DataStore;
 import io.stargate.db.datastore.common.AbstractCassandraPersistence;
+import io.stargate.db.datastore.common.util.UncheckedExecutionException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import org.apache.cassandra.auth.AuthenticatedUser;
+import org.apache.cassandra.concurrent.LocalAwareExecutorService;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.config.ViewDefinition;
-import org.apache.cassandra.cql3.Attributes;
-import org.apache.cassandra.cql3.BatchQueryOptions;
-import org.apache.cassandra.cql3.CQLStatement;
-import org.apache.cassandra.cql3.ColumnSpecification;
-import org.apache.cassandra.cql3.QueryHandler;
-import org.apache.cassandra.cql3.QueryProcessor;
+import org.apache.cassandra.cql3.QueryOptions;
 import org.apache.cassandra.cql3.statements.BatchStatement;
-import org.apache.cassandra.cql3.statements.ModificationStatement;
-import org.apache.cassandra.cql3.statements.ParsedStatement;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.marshal.UserType;
 import org.apache.cassandra.gms.ApplicationState;
@@ -71,17 +65,20 @@ import org.apache.cassandra.service.CassandraDaemon;
 import org.apache.cassandra.service.ClientWarn;
 import org.apache.cassandra.service.MigrationListener;
 import org.apache.cassandra.service.MigrationManager;
+import org.apache.cassandra.service.QueryState;
 import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.stargate.exceptions.InvalidRequestException;
-import org.apache.cassandra.stargate.exceptions.PreparedQueryNotFoundException;
 import org.apache.cassandra.stargate.locator.InetAddressAndPort;
-import org.apache.cassandra.stargate.utils.MD5Digest;
-import org.apache.cassandra.tracing.Tracing;
-import org.apache.cassandra.transport.ProtocolVersion;
+import org.apache.cassandra.transport.Message;
+import org.apache.cassandra.transport.Message.Request;
+import org.apache.cassandra.transport.messages.BatchMessage;
+import org.apache.cassandra.transport.messages.ErrorMessage;
+import org.apache.cassandra.transport.messages.ExecuteMessage;
+import org.apache.cassandra.transport.messages.PrepareMessage;
+import org.apache.cassandra.transport.messages.QueryMessage;
 import org.apache.cassandra.transport.messages.ResultMessage;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.JVMStabilityInspector;
-import org.apache.cassandra.utils.UUIDGen;
+import org.apache.cassandra.utils.MD5Digest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -89,13 +86,17 @@ public class CassandraPersistence
     extends AbstractCassandraPersistence<
         Config,
         org.apache.cassandra.service.ClientState,
-        org.apache.cassandra.service.QueryState,
         KeyspaceMetadata,
         CFMetaData,
         ColumnDefinition,
         UserType,
         IndexMetadata,
         ViewDefinition> {
+  static {
+    System.setProperty(
+        "cassandra.custom_query_handler_class", StargateQueryHandler.class.getName());
+  }
+
   private static final Logger logger = LoggerFactory.getLogger(CassandraPersistence.class);
 
   /*
@@ -106,9 +107,10 @@ public class CassandraPersistence
   private static final int STARTUP_DELAY_MS =
       Integer.getInteger("stargate.startup_delay_ms", 3 * MigrationManager.MIGRATION_DELAY_IN_MS);
 
+  private LocalAwareExecutorService executor;
+
   private CassandraDaemon daemon;
   private Authenticator authenticator;
-  private QueryHandler handler;
   private QueryInterceptor interceptor;
 
   // C* listener that ensures that our Stargate schema remains up-to-date with the internal C* one.
@@ -116,6 +118,10 @@ public class CassandraPersistence
 
   public CassandraPersistence() {
     super("Apache Cassandra");
+  }
+
+  private StargateQueryHandler stargateHandler() {
+    return (StargateQueryHandler) org.apache.cassandra.service.ClientState.getCQLQueryHandler();
   }
 
   @Override
@@ -158,6 +164,13 @@ public class CassandraPersistence
       throw new RuntimeException("Unable to start Cassandra persistence layer", e);
     }
 
+    executor =
+        SHARED.newExecutor(
+            DatabaseDescriptor.getNativeTransportMaxThreads(),
+            Integer.MAX_VALUE,
+            "transport",
+            "Native-Transport-Requests");
+
     // Use special gossip state "X10" to differentiate stargate nodes
     Gossiper.instance.addLocalApplicationState(
         ApplicationState.X10, StorageService.instance.valueFactory.releaseVersion("stargate"));
@@ -167,10 +180,9 @@ public class CassandraPersistence
     waitForSchema(STARTUP_DELAY_MS);
 
     authenticator = new AuthenticatorWrapper(DatabaseDescriptor.getAuthenticator());
-    handler = org.apache.cassandra.service.ClientState.getCQLQueryHandler();
     interceptor = new DefaultQueryInterceptor();
-
     interceptor.initialize();
+    stargateHandler().register(interceptor);
   }
 
   @Override
@@ -208,20 +220,8 @@ public class CassandraPersistence
   }
 
   @Override
-  public DataStore newDataStore(
-      QueryState<org.apache.cassandra.service.QueryState> state, QueryOptions queryOptions) {
-    return new InternalDataStore(
-        this, Conversion.toInternal(state), Conversion.toInternal(queryOptions));
-  }
-
-  @Override
   public ByteBuffer unsetValue() {
     return ByteBufferUtil.UNSET_BYTE_BUFFER;
-  }
-
-  @Override
-  public QueryState newQueryState(ClientState clientState) {
-    return new QueryStateWrapper(clientState);
   }
 
   @Override
@@ -264,265 +264,112 @@ public class CassandraPersistence
     return authenticator;
   }
 
-  @Override
-  public CompletableFuture<? extends Result> query(
-      String cql,
-      QueryState state,
-      QueryOptions options,
-      Map<String, ByteBuffer> customPayload,
-      boolean isTracingRequested,
-      long queryStartNanoTime) {
+  private CompletableFuture<Result> runOnExecutor(Supplier<Result> supplier) {
+    assert executor != null : "This persistence has not be initialized";
     CompletableFuture<Result> future = new CompletableFuture<>();
-
-    EXECUTOR.submit(
+    executor.submit(
         () -> {
           try {
-            org.apache.cassandra.service.QueryState internalState = Conversion.toInternal(state);
-            org.apache.cassandra.cql3.QueryOptions internalOptions = Conversion.toInternal(options);
-
-            UUID tracingId = null;
-            if (isTracingRequested) {
-              tracingId = UUIDGen.getTimeUUID();
-              internalState.prepareTracingSession(tracingId);
-            }
-
-            if (internalState.traceNextQuery()) {
-              internalState.createTracingSession(customPayload);
-              beginTraceQuery(cql, state, options);
-            }
-
-            ParsedStatement.Prepared prepared = QueryProcessor.parseStatement(cql, internalState);
-            internalOptions.prepare(prepared.boundNames);
-            CQLStatement statement = prepared.statement;
-
-            if (internalOptions.getValues().size() != statement.getBoundTerms()) {
-              throw new org.apache.cassandra.exceptions.InvalidRequestException(
-                  String.format(
-                      "there were %d markers(?) in CQL but %d bound variables",
-                      statement.getBoundTerms(), internalOptions.getValues().size()));
-            }
-
-            Result result =
-                interceptor.interceptQuery(
-                    handler, statement, state, options, customPayload, queryStartNanoTime);
-            if (result == null) {
-              result =
-                  Conversion.toResult(
-                      QueryProcessor.instance.processStatement(
-                          statement, internalState, internalOptions, queryStartNanoTime),
-                      internalOptions.getProtocolVersion());
-            }
-
-            future.complete(result.setTracingId(tracingId));
+            future.complete(supplier.get());
           } catch (Throwable t) {
-            Conversion.handleException(future, t);
-          } finally {
-            Tracing.instance.stopSession();
+            JVMStabilityInspector.inspectThrowable(t);
+            Throwable ex = t;
+            if (t instanceof UncheckedExecutionException) {
+              ex = t.getCause();
+            }
+            future.completeExceptionally(ex);
           }
         });
 
     return future;
+  }
+
+  private CompletableFuture<Result> executeRequestOnExecutor(
+      Parameters parameters,
+      long queryStartNanoTime,
+      org.apache.cassandra.transport.ProtocolVersion protocolVersion,
+      Supplier<Request> requestSupplier) {
+    return runOnExecutor(
+        () -> {
+          QueryState queryState = Conversion.newQueryState(parameters.clientState());
+          Request request = requestSupplier.get();
+          if (parameters.tracingRequested()) {
+            request.setTracingRequested();
+          }
+          request.setCustomPayload(parameters.customPayload().orElse(null));
+          Message.Response response = request.execute(queryState, queryStartNanoTime);
+          // There is only 2 types of response that can come out: either a ResutMessage (which
+          // itself can of different kind), or an ErrorMessage.
+          if (response instanceof ErrorMessage) {
+            Throwable cause =
+                Conversion.convertInternalException((Throwable) ((ErrorMessage) response).error);
+            throw new UncheckedExecutionException(cause);
+          }
+          return Conversion.toResult((ResultMessage) response, protocolVersion);
+        });
   }
 
   @Override
   public CompletableFuture<? extends Result> execute(
-      MD5Digest id,
-      QueryState state,
-      QueryOptions options,
-      Map<String, ByteBuffer> customPayload,
-      boolean isTracingRequested,
-      long queryStartNanoTime) {
-    CompletableFuture<Result> future = new CompletableFuture<>();
+      Statement statement, Parameters parameters, long queryStartNanoTime) {
+    QueryOptions options =
+        Conversion.toInternal(statement.values(), statement.boundNames().orElse(null), parameters);
 
-    EXECUTOR.submit(
+    return executeRequestOnExecutor(
+        parameters,
+        queryStartNanoTime,
+        options.getProtocolVersion(),
         () -> {
-          try {
-            org.apache.cassandra.service.QueryState internalState = Conversion.toInternal(state);
-            org.apache.cassandra.cql3.QueryOptions internalOptions = Conversion.toInternal(options);
-
-            UUID tracingId = null;
-            if (isTracingRequested) {
-              tracingId = UUIDGen.getTimeUUID();
-              internalState.prepareTracingSession(tracingId);
-            }
-
-            ParsedStatement.Prepared prepared = handler.getPrepared(Conversion.toInternal(id));
-
-            if (prepared == null) {
-              throw new PreparedQueryNotFoundException(id);
-            }
-
-            // Please note that this needs to happen _before_ the beginTraceExecute, because when
-            // we add bound values to the trace, we rely on the values having been re-ordered by
-            // the following prepare (if named values were used that is).
-            internalOptions.prepare(prepared.boundNames);
-
-            if (internalState.traceNextQuery()) {
-              internalState.createTracingSession(customPayload);
-              beginTraceExecute(
-                  prepared, state, internalOptions, internalOptions.getProtocolVersion());
-            }
-
-            CQLStatement statement = prepared.statement;
-
-            Result result =
-                interceptor.interceptQuery(
-                    handler, statement, state, options, customPayload, queryStartNanoTime);
-            if (result == null) {
-              result =
-                  Conversion.toResult(
-                      QueryProcessor.instance.processPrepared(
-                          statement, internalState, internalOptions, queryStartNanoTime),
-                      internalOptions.getProtocolVersion());
-            }
-
-            future.complete(result.setTracingId(tracingId));
-          } catch (Throwable t) {
-            Conversion.handleException(future, t);
-          } finally {
-            Tracing.instance.stopSession();
+          if (statement instanceof SimpleStatement) {
+            String queryString = ((SimpleStatement) statement).queryString();
+            return new QueryMessage(queryString, options);
+          } else {
+            MD5Digest id = Conversion.toInternal(((BoundStatement) statement).preparedId());
+            return new ExecuteMessage(id, options);
           }
         });
-
-    return future;
   }
 
   @Override
-  public CompletableFuture<? extends Result> prepare(
-      String cql,
-      QueryState state,
-      Map<String, ByteBuffer> customPayload,
-      boolean isTracingRequested) {
-    CompletableFuture<Result> future = new CompletableFuture<>();
-
-    InternalDataStore.EXECUTOR.submit(
-        () -> {
-          try {
-            org.apache.cassandra.service.QueryState internalState = Conversion.toInternal(state);
-
-            UUID tracingId = null;
-            if (isTracingRequested) {
-              tracingId = UUIDGen.getTimeUUID();
-              internalState.prepareTracingSession(tracingId);
-            }
-
-            if (internalState.traceNextQuery()) {
-              internalState.createTracingSession(customPayload);
-              beginTracePrepare(cql, state);
-            }
-
-            future.complete(
-                Conversion.toPrepared(handler.prepare(cql, internalState, customPayload))
-                    .setTracingId(tracingId));
-          } catch (Throwable t) {
-            Conversion.handleException(future, t);
-          } finally {
-            Tracing.instance.stopSession();
-          }
-        });
-
-    return future;
+  public CompletableFuture<? extends Result> prepare(String query, Parameters parameters) {
+    return executeRequestOnExecutor(
+        parameters,
+        // The queryStartNanoTime is not used by prepared message, so it doesn't really matter
+        // that it's only computed now.
+        System.nanoTime(),
+        // This is unused, so we don't bother converting it (but it would trivial to).
+        null,
+        () -> new PrepareMessage(query));
   }
 
   @Override
   public CompletableFuture<? extends Result> batch(
-      BatchType type,
-      List<Object> queryOrIds,
-      List<List<ByteBuffer>> values,
-      QueryState state,
-      QueryOptions options,
-      Map<String, ByteBuffer> customPayload,
-      boolean isTracingRequested,
-      long queryStartNanoTime) {
-    CompletableFuture<Result> future = new CompletableFuture<>();
+      Batch batch, Parameters parameters, long queryStartNanoTime) {
 
-    EXECUTOR.submit(
+    QueryOptions options = Conversion.toInternal(Collections.emptyList(), null, parameters);
+    return executeRequestOnExecutor(
+        parameters,
+        queryStartNanoTime,
+        options.getProtocolVersion(),
         () -> {
-          try {
-            org.apache.cassandra.cql3.QueryOptions internalOptions = Conversion.toInternal(options);
-            org.apache.cassandra.service.QueryState internalState = Conversion.toInternal(state);
+          BatchStatement.Type internalBatchType = Conversion.toInternal(batch.type());
+          List<Object> queryOrIdList = new ArrayList<>(batch.size());
+          List<List<ByteBuffer>> allValues = new ArrayList<>(batch.size());
 
-            UUID tracingId = null;
-            if (isTracingRequested) {
-              tracingId = UUIDGen.getTimeUUID();
-              internalState.prepareTracingSession(tracingId);
-            }
-
-            if (internalState.traceNextQuery()) {
-              internalState.createTracingSession(customPayload);
-              beginTraceBatch(state, options);
-            }
-
-            List<Object> queryOrIdList = Conversion.toInternalQueryOrIds(queryOrIds);
-            BatchStatement.Type internalBatchType = Conversion.toInternal(type);
-
-            int boundTerms = 0;
-            List<ParsedStatement.Prepared> prepared = new ArrayList<>(queryOrIdList.size());
-            for (int i = 0; i < queryOrIdList.size(); i++) {
-              Object query = queryOrIdList.get(i);
-              ParsedStatement.Prepared p;
-              if (query instanceof String) {
-                org.apache.cassandra.service.ClientState cs = internalState.getClientState();
-                if (options.getKeyspace() != null) {
-                  cs.setKeyspace(options.getKeyspace());
-                }
-
-                p = QueryProcessor.parseStatement((String) query, internalState);
-              } else {
-                p = handler.getPrepared((org.apache.cassandra.utils.MD5Digest) query);
-                if (null == p) {
-                  throw new PreparedQueryNotFoundException((MD5Digest) query);
-                }
-              }
-
-              List<ByteBuffer> queryValues = values.get(i);
-              if (queryValues.size() != p.statement.getBoundTerms()) {
-                throw new InvalidRequestException(
-                    String.format(
-                        "There were %d markers(?) in CQL but %d bound variables",
-                        p.statement.getBoundTerms(), queryValues.size()));
-              }
-              boundTerms = p.statement.getBoundTerms();
-              prepared.add(p);
-            }
-
-            BatchQueryOptions batchOptions =
-                BatchQueryOptions.withPerStatementVariables(internalOptions, values, queryOrIdList);
-            List<ModificationStatement> statements = new ArrayList<>(prepared.size());
-            for (int i = 0; i < prepared.size(); i++) {
-              ParsedStatement.Prepared p = prepared.get(i);
-              batchOptions.prepareStatement(i, p.boundNames);
-
-              if (!(p.statement instanceof ModificationStatement)) {
-                throw new InvalidRequestException(
-                    "Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.");
-              }
-
-              statements.add((ModificationStatement) p.statement);
-            }
-
-            // Note: It's ok at this point to pass a bogus value for the number of bound terms in
-            // the BatchState ctor
-            // (and no value would be really correct, so we prefer passing a clearly wrong one).
-            BatchStatement batch =
-                new BatchStatement(boundTerms, internalBatchType, statements, Attributes.none());
-
-            ResultMessage response =
-                handler.processBatch(
-                    batch, internalState, batchOptions, customPayload, queryStartNanoTime);
-
-            future.complete(
-                Conversion.toResult(response, internalOptions.getProtocolVersion())
-                    .setTracingId(tracingId));
-          } catch (Exception e) {
-            JVMStabilityInspector.inspectThrowable(e);
-            Conversion.handleException(future, e);
-          } finally {
-            Tracing.instance.stopSession();
+          for (Statement statement : batch.statements()) {
+            queryOrIdList.add(queryOrId(statement));
+            allValues.add(statement.values());
           }
+          return new BatchMessage(internalBatchType, queryOrIdList, allValues, options);
         });
+  }
 
-    return future;
+  private static Object queryOrId(Statement statement) {
+    if (statement instanceof SimpleStatement) {
+      return ((SimpleStatement) statement).queryString();
+    } else {
+      return Conversion.toInternal(((BoundStatement) statement).preparedId());
+    }
   }
 
   @Override
@@ -534,8 +381,7 @@ public class CassandraPersistence
     // probably the right answer in that case. In practice, this shouldn't be a problem though.
 
     // Important: This must include all nodes including fat clients, otherwise we'll get write
-    // errors
-    // with INCOMPATIBLE_SCHEMA.
+    // errors with INCOMPATIBLE_SCHEMA.
     return Gossiper.instance.getLiveMembers().stream()
             .filter(
                 ep -> {
@@ -561,77 +407,6 @@ public class CassandraPersistence
   @Override
   public void resetClientWarnings() {
     ClientWarn.instance.resetWarnings();
-  }
-
-  private void beginTraceQuery(String cql, QueryState state, QueryOptions options) {
-    ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
-    builder.put("query", cql);
-    if (options.getPageSize() > 0) {
-      builder.put("page_size", Integer.toString(options.getPageSize()));
-    }
-    if (options.getConsistency() != null) {
-      builder.put("consistency_level", options.getConsistency().name());
-    }
-    if (options.getSerialConsistency() != null) {
-      builder.put("serial_consistency_level", options.getSerialConsistency().name());
-    }
-
-    Tracing.instance.begin("Execute CQL3 query", state.getClientAddress(), builder.build());
-  }
-
-  private void beginTraceExecute(
-      ParsedStatement.Prepared prepared,
-      QueryState state,
-      org.apache.cassandra.cql3.QueryOptions options,
-      ProtocolVersion version) {
-    ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
-    if (options.getPageSize() > 0) {
-      builder.put("page_size", Integer.toString(options.getPageSize()));
-    }
-    if (options.getConsistency() != null) {
-      builder.put("consistency_level", options.getConsistency().name());
-    }
-    if (options.getSerialConsistency() != null) {
-      builder.put("serial_consistency_level", options.getSerialConsistency().name());
-    }
-    builder.put("query", prepared.rawCQLStatement);
-
-    for (int i = 0; i < prepared.boundNames.size(); i++) {
-      ColumnSpecification cs = prepared.boundNames.get(i);
-      String boundName = cs.name.toString();
-      List<ByteBuffer> values = options.getValues();
-      String boundValue = cs.type.asCQL3Type().toCQLLiteral(values.get(i), version);
-      if (boundValue.length() > 1000) {
-        boundValue = boundValue.substring(0, 1000) + "...'";
-      }
-
-      // Here we prefix boundName with the index to avoid possible collission in builder keys due to
-      // having multiple boundValues for the same variable
-      builder.put("bound_var_" + Integer.toString(i) + "_" + boundName, boundValue);
-    }
-
-    Tracing.instance.begin(
-        "Execute CQL3 prepared query", state.getClientAddress(), builder.build());
-  }
-
-  private void beginTracePrepare(String cql, QueryState state) {
-    Tracing.instance.begin(
-        "Preparing CQL3 query", state.getClientAddress(), ImmutableMap.of("query", cql));
-  }
-
-  private void beginTraceBatch(QueryState state, QueryOptions options) {
-    ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
-    if (options.getConsistency() != null) {
-      builder.put("consistency_level", options.getConsistency().name());
-    }
-    if (options.getSerialConsistency() != null) {
-      builder.put("serial_consistency_level", options.getSerialConsistency().name());
-    }
-
-    // TODO we don't have [typed] access to CQL bind variables here.  CASSANDRA-4560 is open to add
-    // support.
-    Tracing.instance.begin(
-        "Execute batch of CQL3 queries", state.getClientAddress(), builder.build());
   }
 
   /**

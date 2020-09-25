@@ -21,8 +21,8 @@ import graphql.schema.DataFetchingEnvironment;
 import io.stargate.auth.AuthenticationService;
 import io.stargate.auth.StoredCredentials;
 import io.stargate.db.ClientState;
+import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
-import io.stargate.db.QueryState;
 import io.stargate.db.datastore.DataStore;
 import io.stargate.graphql.graphqlservlet.HTTPAwareContextImpl;
 import java.util.HashMap;
@@ -31,11 +31,11 @@ import java.util.Map;
 
 public class CreateKeyspaceFetcher implements SchemaFetcher {
 
-  private final Persistence<?, ?, ?> persistence;
+  private final Persistence<?, ?> persistence;
   private final AuthenticationService authenticationService;
 
   public CreateKeyspaceFetcher(
-      Persistence<?, ?, ?> persistence, AuthenticationService authenticationService) {
+      Persistence<?, ?> persistence, AuthenticationService authenticationService) {
     this.persistence = persistence;
     this.authenticationService = authenticationService;
   }
@@ -86,8 +86,7 @@ public class CreateKeyspaceFetcher implements SchemaFetcher {
     String token = httpAwareContext.getAuthToken();
     StoredCredentials storedCredentials = authenticationService.validateToken(token);
     ClientState clientState = persistence.newClientState(storedCredentials.getRoleName());
-    QueryState queryState = persistence.newQueryState(clientState);
-    DataStore dataStore = persistence.newDataStore(queryState, null);
+    DataStore dataStore = persistence.newDataStore(Parameters.defaultWith(clientState));
 
     dataStore.query(getQuery(environment)).get();
     return true;

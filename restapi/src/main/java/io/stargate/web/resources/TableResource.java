@@ -28,7 +28,6 @@ import io.stargate.web.models.SuccessResponse;
 import io.stargate.web.models.TableAdd;
 import io.stargate.web.models.TableOptions;
 import io.stargate.web.models.TableResponse;
-import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -149,10 +148,7 @@ public class TableResource {
                   Converters.maybeQuote(tableAdd.getName()),
                   columnDefinitions.toString(),
                   tableOptions);
-          localDB
-              .query(
-                  query.trim(), Optional.of(ConsistencyLevel.LOCAL_QUORUM), Collections.emptyList())
-              .get();
+          localDB.query(query.trim(), Optional.of(ConsistencyLevel.LOCAL_QUORUM)).get();
 
           return Response.status(Response.Status.CREATED).entity(new SuccessResponse()).build();
         });

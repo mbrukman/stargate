@@ -31,8 +31,10 @@ import io.netty.channel.EventLoop;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.MessageToMessageDecoder;
 import io.netty.handler.codec.MessageToMessageEncoder;
+import io.stargate.db.ClientState;
+import io.stargate.db.ImmutableParameters;
+import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
-import io.stargate.db.QueryState;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -40,6 +42,9 @@ import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -52,6 +57,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.cassandra.net.ResourceLimits;
 import org.apache.cassandra.service.ClientWarn;
+import org.apache.cassandra.stargate.db.ConsistencyLevel;
 import org.apache.cassandra.stargate.exceptions.OverloadedException;
 import org.apache.cassandra.stargate.metrics.ClientMetrics;
 import org.apache.cassandra.stargate.transport.ProtocolException;
@@ -207,6 +213,11 @@ public abstract class Message {
     this.customPayload = customPayload;
   }
 
+  public ClientState getClientState() {
+    assert connection instanceof ServerConnection;
+    return ((ServerConnection) connection).getClientState();
+  }
+
   public abstract static class Request extends Message {
     private boolean tracingRequested;
 
@@ -217,7 +228,7 @@ public abstract class Message {
     }
 
     protected abstract CompletableFuture<? extends Response> execute(
-        Persistence persistence, QueryState queryState, long queryStartNanoTime);
+        Persistence persistence, long queryStartNanoTime);
 
     void setTracingRequested() {
       tracingRequested = true;
@@ -225,6 +236,42 @@ public abstract class Message {
 
     protected boolean isTracingRequested() {
       return tracingRequested;
+    }
+
+    protected Parameters makeParameters(QueryOptions options) {
+      return ImmutableParameters.builder()
+          .clientState(getClientState())
+          .consistencyLevel(options.getConsistency())
+          .serialConsistencyLevel(Optional.ofNullable(options.getSerialConsistency()))
+          .protocolVersion(options.getProtocolVersion())
+          .pageSize(
+              options.getPageSize() < 0
+                  ? OptionalInt.empty()
+                  : OptionalInt.of(options.getPageSize()))
+          .pagingState(Optional.ofNullable(options.getPagingState()))
+          .defaultTimestamp(
+              options.getTimestamp() == Long.MIN_VALUE
+                  ? OptionalLong.empty()
+                  : OptionalLong.of(options.getTimestamp()))
+          .nowInSeconds(
+              options.getNowInSeconds() == Integer.MIN_VALUE
+                  ? OptionalInt.empty()
+                  : OptionalInt.of(options.getNowInSeconds()))
+          .defaultKeyspace(Optional.ofNullable(options.getKeyspace()))
+          .skipMetadataInResult(options.skipMetadata())
+          .customPayload(Optional.ofNullable(getCustomPayload()))
+          .tracingRequested(isTracingRequested())
+          .build();
+    }
+
+    protected Parameters makeParameters() {
+      return ImmutableParameters.builder()
+          .clientState(getClientState())
+          .consistencyLevel(ConsistencyLevel.ONE)
+          .protocolVersion(ProtocolVersion.CURRENT)
+          .customPayload(Optional.ofNullable(getCustomPayload()))
+          .tracingRequested(isTracingRequested())
+          .build();
     }
   }
 
@@ -611,13 +658,13 @@ public abstract class Message {
         if (connection.getVersion().isGreaterOrEqualTo(ProtocolVersion.V4))
           persistence.captureClientWarnings();
 
-        QueryState qstate = connection.validateNewMessage(request.type, connection.getVersion());
+        connection.validateNewMessage(request.type, connection.getVersion());
 
         logger.trace("Received: {}, v={}", request, connection.getVersion());
         connection.requests.inc();
 
         CompletableFuture<? extends Response> req =
-            request.execute(persistence, qstate, queryStartNanoTime);
+            request.execute(persistence, queryStartNanoTime);
 
         req.whenComplete(
             (response, err) -> {

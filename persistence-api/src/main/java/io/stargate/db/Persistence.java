@@ -15,18 +15,33 @@
  */
 package io.stargate.db;
 
+import com.datastax.oss.driver.shaded.guava.common.util.concurrent.Uninterruptibles;
 import io.stargate.db.datastore.DataStore;
+import io.stargate.db.datastore.PersistenceBackedDataStore;
 import io.stargate.db.schema.Schema;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.util.List;
-import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import javax.annotation.Nonnull;
 import org.apache.cassandra.stargate.locator.InetAddressAndPort;
-import org.apache.cassandra.stargate.utils.MD5Digest;
 
-public interface Persistence<T, C, Q> {
+/**
+ * A persistence layer that can be queried.
+ *
+ * <p>This is the interface that stargate API extensions uses (either directly, or through the
+ * higher level {@link DataStore} API wraps a instance of this interface) to query the underlying
+ * store, and thus the one interface that persistence extensions must implement.
+ *
+ * @param <T> the type of the config for the persistence implementation.
+ * @param <C> the type of the "client state" class used by the persistence implementation.
+ */
+public interface Persistence<T, C> {
+
+  /** Name describing the persistence implementation. */
   String name();
 
   void initialize(T config);
@@ -46,8 +61,6 @@ public interface Persistence<T, C, Q> {
 
   InetAddressAndPort getNativeAddress(InetAddressAndPort endpoint);
 
-  QueryState<Q> newQueryState(ClientState<C> clientState);
-
   ClientState<C> newClientState(SocketAddress remoteAddress, InetSocketAddress publicAddress);
 
   ClientState newClientState(String name);
@@ -56,11 +69,14 @@ public interface Persistence<T, C, Q> {
 
   Authenticator getAuthenticator();
 
-  DataStore newDataStore(QueryState<Q> state, QueryOptions queryOptions);
+  default DataStore newDataStore(@Nonnull Parameters queryParameters) {
+    Objects.requireNonNull(queryParameters);
+    return new PersistenceBackedDataStore<>(this, queryParameters);
+  }
 
   /**
    * The object that should be used to act as an 'unset' value for this persistence (for use in
-   * {@link QueryOptions#getValues()} or in the {@code values} argument of {@link #batch}).
+   * {@link Statement#values()}).
    *
    * <p>Please note that persistence implementations are allowed to use <b>reference equality</b> to
    * detect this value, so the object returned by this method should be used "as-is" and should
@@ -68,39 +84,26 @@ public interface Persistence<T, C, Q> {
    */
   ByteBuffer unsetValue();
 
-  CompletableFuture<? extends Result> query(
-      String cql,
-      QueryState state,
-      QueryOptions options,
-      Map<String, ByteBuffer> customPayload,
-      boolean isTracingRequested,
-      long queryStartNanoTime);
-
   CompletableFuture<? extends Result> execute(
-      MD5Digest id,
-      QueryState state,
-      QueryOptions options,
-      Map<String, ByteBuffer> customPayload,
-      boolean isTracingRequested,
-      long queryStartNanoTime);
+      Statement statement, Parameters parameters, long queryStartNanoTime);
 
-  CompletableFuture<? extends Result> prepare(
-      String cql,
-      QueryState state,
-      Map<String, ByteBuffer> customPayload,
-      boolean isTracingRequested);
+  CompletableFuture<? extends Result> prepare(String cql, Parameters parameters);
 
   CompletableFuture<? extends Result> batch(
-      BatchType type,
-      List<Object> queryOrIds,
-      List<List<ByteBuffer>> values,
-      QueryState state,
-      QueryOptions options,
-      Map<String, ByteBuffer> customPayload,
-      boolean isTracingRequested,
-      long queryStartNanoTime);
+      Batch batch, Parameters parameters, long queryStartNanoTime);
 
   boolean isInSchemaAgreement();
+
+  /** Wait for schema to agree across the cluster */
+  default void waitForSchemaAgreement() {
+    for (int count = 0; count < 100; count++) {
+      if (isInSchemaAgreement()) {
+        return;
+      }
+      Uninterruptibles.sleepUninterruptibly(200, TimeUnit.MILLISECONDS);
+    }
+    throw new IllegalStateException("Failed to reach schema agreement after 20 seconds.");
+  }
 
   void captureClientWarnings();
 

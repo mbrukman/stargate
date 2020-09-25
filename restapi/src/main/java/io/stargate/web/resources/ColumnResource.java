@@ -25,7 +25,6 @@ import io.stargate.web.models.ColumnDefinition;
 import io.stargate.web.models.ColumnUpdate;
 import io.stargate.web.models.Error;
 import io.stargate.web.models.SuccessResponse;
-import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -190,8 +189,7 @@ public class ColumnResource {
                       Converters.maybeQuote(keyspaceName),
                       Converters.maybeQuote(tableName),
                       alterInstructions),
-                  Optional.of(ConsistencyLevel.LOCAL_QUORUM),
-                  Collections.emptyList())
+                  Optional.of(ConsistencyLevel.LOCAL_QUORUM))
               .get();
 
           return Response.status(Response.Status.OK).entity(new SuccessResponse()).build();

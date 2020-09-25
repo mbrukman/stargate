@@ -15,14 +15,11 @@
  */
 package io.stargate.db.datastore;
 
-import com.datastax.oss.driver.shaded.guava.common.util.concurrent.Uninterruptibles;
 import io.stargate.db.datastore.query.QueryBuilder;
 import io.stargate.db.schema.Index;
 import io.stargate.db.schema.Schema;
-import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 import org.apache.cassandra.stargate.db.ConsistencyLevel;
 
 /**
@@ -45,19 +42,11 @@ public interface DataStore {
   CompletableFuture<ResultSet> query(
       String cql, Optional<ConsistencyLevel> consistencyLevel, Object... parameters);
 
-  default PreparedStatement prepare(String cql) {
+  default CompletableFuture<PreparedStatement> prepare(String cql) {
     return prepare(cql, Optional.empty());
   }
 
-  PreparedStatement prepare(String cql, Optional<Index> index);
-
-  default CompletableFuture<ResultSet> processBatch(
-      List<PreparedStatement> statements,
-      List<Object[]> vals,
-      Optional<ConsistencyLevel> consistencyLevel) {
-    throw new UnsupportedOperationException(
-        "Batching not supported on " + getClass().getSimpleName());
-  }
+  CompletableFuture<PreparedStatement> prepare(String cql, Optional<Index> index);
 
   /**
    * Returns the current schema.
@@ -66,17 +55,9 @@ public interface DataStore {
    */
   Schema schema();
 
-  /** Wait for schema to agree across the cluster */
-  default void waitForSchemaAgreement() {
-    for (int count = 0; count < 100; count++) {
-      if (isInSchemaAgreement()) {
-        return;
-      }
-      Uninterruptibles.sleepUninterruptibly(200, TimeUnit.MILLISECONDS);
-    }
-    throw new IllegalStateException("Failed to reach schema agreement after 20 seconds.");
-  }
-
   /** Returns true if in schema agreement */
   boolean isInSchemaAgreement();
+
+  /** Wait for schema to agree across the cluster */
+  void waitForSchemaAgreement();
 }

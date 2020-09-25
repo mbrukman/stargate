@@ -19,15 +19,15 @@ import io.stargate.auth.AuthenticationService;
 import io.stargate.auth.StoredCredentials;
 import io.stargate.auth.UnauthorizedException;
 import io.stargate.db.ClientState;
-import io.stargate.db.DefaultQueryOptions;
+import io.stargate.db.ImmutableParameters;
+import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
-import io.stargate.db.QueryOptions;
-import io.stargate.db.QueryState;
 import io.stargate.db.datastore.DataStore;
 import io.stargate.db.schema.Keyspace;
 import io.stargate.db.schema.Table;
 import java.nio.ByteBuffer;
 import java.util.Collection;
+import java.util.Optional;
 import javax.ws.rs.NotFoundException;
 
 public class Db {
@@ -57,45 +57,40 @@ public class Db {
     return tableMetadata;
   }
 
-  public Db(final Persistence<?, ?, ?> persistence, AuthenticationService authenticationService) {
+  public Db(final Persistence<?, ?> persistence, AuthenticationService authenticationService) {
     this.authenticationService = authenticationService;
     this.persistence = persistence;
     ClientState clientState = persistence.newClientState("");
-    QueryState queryState = persistence.newQueryState(clientState);
-    this.dataStore = persistence.newDataStore(queryState, null);
+    this.dataStore = persistence.newDataStore(Parameters.defaultWith(clientState));
   }
 
   public DataStore getDataStore() {
     return this.dataStore;
   }
 
-  public Persistence<?, ?, ?> getPersistence() {
+  public Persistence<?, ?> getPersistence() {
     return this.persistence;
   }
 
   public DataStore getDataStoreForToken(String token) throws UnauthorizedException {
     StoredCredentials storedCredentials = authenticationService.validateToken(token);
     ClientState clientState = this.persistence.newClientState(storedCredentials.getRoleName());
-    QueryState queryState = this.persistence.newQueryState(clientState);
 
-    return this.persistence.newDataStore(queryState, null);
+    return this.persistence.newDataStore(Parameters.defaultWith(clientState));
   }
 
   public DataStore getDataStoreForToken(String token, int pageSize, ByteBuffer pagingState)
       throws UnauthorizedException {
     StoredCredentials storedCredentials = authenticationService.validateToken(token);
     ClientState clientState = this.persistence.newClientState(storedCredentials.getRoleName());
-    QueryState queryState = this.persistence.newQueryState(clientState);
 
-    QueryOptions queryOptions =
-        DefaultQueryOptions.builder()
-            .options(
-                DefaultQueryOptions.SpecificOptions.builder()
-                    .pageSize(pageSize)
-                    .pagingState(pagingState)
-                    .build())
+    Parameters parameters =
+        ImmutableParameters.builder()
+            .clientState(clientState)
+            .pageSize(pageSize)
+            .pagingState(Optional.ofNullable(pagingState))
             .build();
 
-    return this.persistence.newDataStore(queryState, queryOptions);
+    return this.persistence.newDataStore(parameters);
   }
 }

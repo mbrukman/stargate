@@ -1,5 +1,7 @@
 package io.stargate.db.datastore.common;
 
+import com.google.common.collect.ImmutableMap;
+import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
 import io.stargate.db.schema.Schema;
 import org.slf4j.Logger;
@@ -14,7 +16,6 @@ import org.slf4j.LoggerFactory;
  *
  * @param <Config>
  * @param <ClientState>
- * @param <QueryState>
  * @param <K> the concrete class for keyspace metadata in the persistence layer.
  * @param <T> the concrete class for table metadata in the persistence layer.
  * @param <C> the concrete class for column metadata in the persistence layer.
@@ -22,9 +23,8 @@ import org.slf4j.LoggerFactory;
  * @param <I> the concrete class for secondary indexes metadata in the persistence layer.
  * @param <V> the concrete class for materialized views metadata in the persistence layer.
  */
-public abstract class AbstractCassandraPersistence<
-        Config, ClientState, QueryState, K, T, C, U, I, V>
-    implements Persistence<Config, ClientState, QueryState> {
+public abstract class AbstractCassandraPersistence<Config, ClientState, K, T, C, U, I, V>
+    implements Persistence<Config, ClientState> {
 
   private static final Logger logger = LoggerFactory.getLogger(AbstractCassandraPersistence.class);
 
@@ -114,5 +114,23 @@ public abstract class AbstractCassandraPersistence<
   public final void destroy() {
     destroyPersistence();
     unregisterInternalSchemaListener();
+  }
+
+  /**
+   * A builder for tracing parameters populated with the default parameters for executing a query
+   * (everything that is common to prepared and non-prepared queries).
+   */
+  protected static ImmutableMap.Builder<String, String> defaultQueryTraceParameters(
+      String query, Parameters parameters) {
+    ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
+    builder.put("query", query);
+    if (parameters.pageSize().isPresent()) {
+      builder.put("page_size", Integer.toString(parameters.pageSize().getAsInt()));
+    }
+    builder.put("consistency_level", parameters.consistencyLevel().name());
+    if (parameters.serialConsistencyLevel().isPresent()) {
+      builder.put("serial_consistency_level", parameters.serialConsistencyLevel().get().name());
+    }
+    return builder;
   }
 }

@@ -31,8 +31,7 @@ public class ClientStateWrapper implements io.stargate.db.ClientState<ClientStat
   public static ClientStateWrapper forExternalCalls(
       SocketAddress remoteAddress, InetSocketAddress publicAddress) {
     return new ClientStateWrapper(
-        org.apache.cassandra.service.ClientState.forExternalCalls(remoteAddress, null),
-        publicAddress);
+        new ClientStateWithPublicAddress(remoteAddress, publicAddress), publicAddress);
   }
 
   public static ClientStateWrapper forExternalCalls(
@@ -40,8 +39,7 @@ public class ClientStateWrapper implements io.stargate.db.ClientState<ClientStat
       InetSocketAddress remoteAddress,
       InetSocketAddress publicAddress) {
     return new ClientStateWrapper(
-        org.apache.cassandra.service.ClientState.forExternalCalls(user, remoteAddress),
-        publicAddress);
+        new ClientStateWithPublicAddress(user, remoteAddress, publicAddress), publicAddress);
   }
 
   public static ClientStateWrapper forInternalCalls() {
