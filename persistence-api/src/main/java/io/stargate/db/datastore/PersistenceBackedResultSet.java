@@ -16,7 +16,7 @@ import java.util.NoSuchElementException;
 import java.util.concurrent.ExecutionException;
 
 class PersistenceBackedResultSet implements ResultSet {
-  private final Persistence<?, ?> persistence;
+  private final Persistence<?> persistence;
   private final Parameters parameters;
   private final Statement statement;
   private final ProtocolVersion driverProtocolVersion;
@@ -27,7 +27,7 @@ class PersistenceBackedResultSet implements ResultSet {
   private ByteBuffer nextPagingState;
 
   PersistenceBackedResultSet(
-      Persistence<?, ?> persistence,
+      Persistence<?> persistence,
       Parameters parameters,
       Statement statement,
       ProtocolVersion driverProtocolVersion,

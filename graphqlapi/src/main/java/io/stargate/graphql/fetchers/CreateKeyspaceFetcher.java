@@ -31,11 +31,11 @@ import java.util.Map;
 
 public class CreateKeyspaceFetcher implements SchemaFetcher {
 
-  private final Persistence<?, ?> persistence;
+  private final Persistence<?> persistence;
   private final AuthenticationService authenticationService;
 
   public CreateKeyspaceFetcher(
-      Persistence<?, ?> persistence, AuthenticationService authenticationService) {
+      Persistence<?> persistence, AuthenticationService authenticationService) {
     this.persistence = persistence;
     this.authenticationService = authenticationService;
   }

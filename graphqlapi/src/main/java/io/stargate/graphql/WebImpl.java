@@ -36,7 +36,7 @@ public class WebImpl {
   private final Server server;
 
   public WebImpl(
-      Persistence<?, ?> persistence, Metrics metrics, AuthenticationService authentication) {
+      Persistence<?> persistence, Metrics metrics, AuthenticationService authentication) {
     server = new Server();
 
     ServerConnector connector = new ServerConnector(server);

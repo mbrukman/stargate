@@ -36,17 +36,12 @@ import org.apache.cassandra.stargate.locator.InetAddressAndPort;
  * higher level {@link DataStore} API wraps a instance of this interface) to query the underlying
  * store, and thus the one interface that persistence extensions must implement.
  *
- * @param <T> the type of the config for the persistence implementation.
  * @param <C> the type of the "client state" class used by the persistence implementation.
  */
-public interface Persistence<T, C> {
+public interface Persistence<C> {
 
   /** Name describing the persistence implementation. */
   String name();
-
-  void initialize(T config);
-
-  void destroy();
 
   /**
    * Returns the current schema.
@@ -63,7 +58,7 @@ public interface Persistence<T, C> {
 
   ClientState<C> newClientState(SocketAddress remoteAddress, InetSocketAddress publicAddress);
 
-  ClientState newClientState(String name);
+  ClientState<C> newClientState(String name);
 
   AuthenticatedUser<?> newAuthenticatedUser(String name);
 

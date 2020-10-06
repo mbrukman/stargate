@@ -57,7 +57,7 @@ public class Db {
     return tableMetadata;
   }
 
-  public Db(final Persistence<?, ?> persistence, AuthenticationService authenticationService) {
+  public Db(final Persistence<?> persistence, AuthenticationService authenticationService) {
     this.authenticationService = authenticationService;
     this.persistence = persistence;
     ClientState clientState = persistence.newClientState("");
@@ -68,7 +68,7 @@ public class Db {
     return this.dataStore;
   }
 
-  public Persistence<?, ?> getPersistence() {
+  public Persistence<?> getPersistence() {
     return this.persistence;
   }
 

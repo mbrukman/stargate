@@ -9,12 +9,11 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import org.apache.cassandra.stargate.db.ConsistencyLevel;
 
-public class PersistenceBackedDataStore<T, C> implements DataStore {
-
-  private final Persistence<T, C> persistence;
+public class PersistenceBackedDataStore<C> implements DataStore {
+  private final Persistence<C> persistence;
   private final Parameters parameters;
 
-  public PersistenceBackedDataStore(Persistence<T, C> persistence, Parameters parameters) {
+  public PersistenceBackedDataStore(Persistence<C> persistence, Parameters parameters) {
     this.persistence = persistence;
     this.parameters = parameters;
   }

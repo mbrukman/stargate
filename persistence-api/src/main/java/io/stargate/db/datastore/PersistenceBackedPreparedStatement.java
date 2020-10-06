@@ -25,14 +25,14 @@ import org.apache.cassandra.stargate.transport.ProtocolException;
 import org.apache.cassandra.stargate.utils.MD5Digest;
 
 class PersistenceBackedPreparedStatement implements PreparedStatement {
-  private final Persistence<?, ?> persistence;
+  private final Persistence<?> persistence;
   private final Parameters parameters;
   private final MD5Digest id;
   private final List<Column> bindMarkerDefinitions;
   private final ProtocolVersion driverProtocolVersion;
 
   PersistenceBackedPreparedStatement(
-      Persistence<?, ?> persistence,
+      Persistence<?> persistence,
       Parameters parameters,
       MD5Digest id,
       List<Column> bindMarkerDefinitions) {

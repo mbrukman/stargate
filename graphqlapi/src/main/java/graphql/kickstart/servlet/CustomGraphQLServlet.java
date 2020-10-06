@@ -50,14 +50,14 @@ public class CustomGraphQLServlet extends HttpServlet implements Servlet, EventL
   private static final Logger LOG = LoggerFactory.getLogger(CustomGraphQLServlet.class);
   private static final Pattern KEYSPACE_NAME_PATTERN = Pattern.compile("\\w+");
 
-  private final Persistence<?, ?> persistence;
+  private final Persistence<?> persistence;
   private final AuthenticationService authenticationService;
   private final String defaultKeyspace;
 
   private final ConcurrentMap<String, HttpRequestHandler> keyspaceHandlers;
 
   public CustomGraphQLServlet(
-      Persistence<?, ?> persistence, AuthenticationService authenticationService) {
+      Persistence<?> persistence, AuthenticationService authenticationService) {
     this.persistence = persistence;
     this.authenticationService = authenticationService;
     DataStore dataStore = persistence.newDataStore(Parameters.DEFAULT);
@@ -163,7 +163,7 @@ public class CustomGraphQLServlet extends HttpServlet implements Servlet, EventL
   }
 
   private static ConcurrentMap<String, HttpRequestHandler> initKeyspaceHandlers(
-      Persistence<?, ?> persistence,
+      Persistence<?> persistence,
       DataStore dataStore,
       AuthenticationService authenticationService) {
 
@@ -204,9 +204,7 @@ public class CustomGraphQLServlet extends HttpServlet implements Servlet, EventL
   }
 
   private static HttpRequestHandler buildKeyspaceHandler(
-      Keyspace keyspace,
-      Persistence<?, ?> persistence,
-      AuthenticationService authenticationService) {
+      Keyspace keyspace, Persistence<?> persistence, AuthenticationService authenticationService) {
     GraphQLSchema schema =
         new GqlKeyspaceSchema(persistence, authenticationService, keyspace).build().build();
     GraphQLConfiguration configuration =

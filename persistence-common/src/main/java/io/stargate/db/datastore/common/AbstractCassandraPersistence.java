@@ -24,7 +24,7 @@ import org.slf4j.LoggerFactory;
  * @param <V> the concrete class for materialized views metadata in the persistence layer.
  */
 public abstract class AbstractCassandraPersistence<Config, ClientState, K, T, C, U, I, V>
-    implements Persistence<Config, ClientState> {
+    implements Persistence<ClientState> {
 
   private static final Logger logger = LoggerFactory.getLogger(AbstractCassandraPersistence.class);
 
@@ -92,7 +92,6 @@ public abstract class AbstractCassandraPersistence<Config, ClientState, K, T, C,
     return schema;
   }
 
-  @Override
   public final void initialize(Config config) {
     logger.info("Initializing {}", name);
 
@@ -110,7 +109,6 @@ public abstract class AbstractCassandraPersistence<Config, ClientState, K, T, C,
     return schemaConverter.convertCassandraSchema(currentInternalSchema());
   }
 
-  @Override
   public final void destroy() {
     destroyPersistence();
     unregisterInternalSchemaListener();
