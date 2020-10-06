@@ -66,6 +66,7 @@ import okhttp3.OkHttpClient;
 import org.apache.http.HttpStatus;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -84,6 +85,7 @@ import org.junit.jupiter.api.Test;
  * </ul>
  */
 @NotThreadSafe
+@Disabled
 public class GraphqlTest extends BaseOsgiIntegrationTest {
 
   private CqlSession session;
