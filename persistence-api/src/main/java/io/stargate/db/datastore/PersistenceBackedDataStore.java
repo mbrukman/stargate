@@ -2,6 +2,7 @@ package io.stargate.db.datastore;
 
 import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
+import io.stargate.db.datastore.PersistenceBackedPreparedStatement.PreparedInfo;
 import io.stargate.db.schema.Index;
 import io.stargate.db.schema.Schema;
 import java.util.Optional;
@@ -30,7 +31,7 @@ class PersistenceBackedDataStore implements DataStore {
         .thenApply(
             prepared ->
                 new PersistenceBackedPreparedStatement(
-                    connection, parameters, prepared.statementId, prepared.metadata.columns));
+                    connection, parameters, new PreparedInfo(prepared), cql));
   }
 
   private Persistence persistence() {

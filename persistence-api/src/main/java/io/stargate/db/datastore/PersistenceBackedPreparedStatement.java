@@ -19,27 +19,34 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import org.apache.cassandra.stargate.db.ConsistencyLevel;
 import org.apache.cassandra.stargate.exceptions.InvalidRequestException;
+import org.apache.cassandra.stargate.exceptions.PreparedQueryNotFoundException;
 import org.apache.cassandra.stargate.transport.ProtocolException;
 import org.apache.cassandra.stargate.utils.MD5Digest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 class PersistenceBackedPreparedStatement implements PreparedStatement {
+  private static final Logger logger =
+      LoggerFactory.getLogger(PersistenceBackedPreparedStatement.class);
+
   private final Persistence.Connection connection;
   private final Parameters parameters;
-  private final MD5Digest id;
-  private final List<Column> bindMarkerDefinitions;
+  private volatile PreparedInfo info;
   private final ProtocolVersion driverProtocolVersion;
+  private final String queryString;
 
   PersistenceBackedPreparedStatement(
       Persistence.Connection connection,
       Parameters parameters,
-      MD5Digest id,
-      List<Column> bindMarkerDefinitions) {
+      PreparedInfo info,
+      String queryString) {
     this.connection = connection;
     this.parameters = parameters;
-    this.id = id;
-    this.bindMarkerDefinitions = bindMarkerDefinitions;
+    this.info = info;
+    this.queryString = queryString;
     this.driverProtocolVersion = toDriverVersion(parameters.protocolVersion());
   }
 
@@ -65,21 +72,79 @@ class PersistenceBackedPreparedStatement implements PreparedStatement {
   public CompletableFuture<ResultSet> execute(
       Optional<ConsistencyLevel> consistencyLevel, Object... values) {
     long queryStartNanos = System.nanoTime();
-
-    // TODO: we should handle the case where our prepared statement has been evicted, typically
-    //   due to a schema change invalidating it. And re-prepare transparently.
-
     Parameters executeParameters =
         consistencyLevel.isPresent()
             ? parameters.withConsistencyLevel(consistencyLevel.get())
             : parameters;
 
-    List<ByteBuffer> boundValues = serializeBoundValues(values);
-    BoundStatement statement = new BoundStatement(id, boundValues, null);
+    CompletableFuture<ResultSet> future = new CompletableFuture<>();
+    executeWithRetry(values, executeParameters, queryStartNanos, future);
+    return future;
+  }
 
-    return connection
+  private void executeWithRetry(
+      Object[] values,
+      Parameters executeParameters,
+      long queryStartNanos,
+      CompletableFuture<ResultSet> future) {
+    doExecute(
+        values,
+        executeParameters,
+        queryStartNanos,
+        future,
+        ex -> {
+          if (ex instanceof PreparedQueryNotFoundException) {
+            // This could happen due to a schema change between the statement preparation and now,
+            // as some schema change can invalidate preparation.
+            rePrepareAndRetry(values, executeParameters, queryStartNanos, future);
+          } else {
+            future.completeExceptionally(ex);
+          }
+        });
+  }
+
+  private void doExecute(
+      Object[] values,
+      Parameters executeParameters,
+      long queryStartNanos,
+      CompletableFuture<ResultSet> successFuture,
+      Consumer<Throwable> onException) {
+    PreparedInfo info = this.info; // Avoiding races between execute().
+    List<ByteBuffer> boundValues = serializeBoundValues(values, info);
+    BoundStatement statement = new BoundStatement(info.id, boundValues, null);
+
+    connection
         .execute(statement, executeParameters, queryStartNanos)
-        .thenApply(r -> createResultSet(r, statement, executeParameters));
+        .thenAccept(r -> successFuture.complete(createResultSet(r, statement, executeParameters)))
+        .exceptionally(
+            ex -> {
+              onException.accept(ex);
+              return null;
+            });
+  }
+
+  private void rePrepareAndRetry(
+      Object[] values,
+      Parameters executeParameters,
+      long queryStartNanos,
+      CompletableFuture<ResultSet> future) {
+
+    logger.debug(
+        "Prepared statement (id={}) was invalid when executed. This can happen due to a "
+            + "conflicting schema change. Will re-prepare and retry.",
+        info.id);
+    connection
+        .prepare(queryString, parameters)
+        .thenAccept(
+            prepared -> {
+              this.info = new PreparedInfo(prepared);
+              executeWithRetry(values, executeParameters, queryStartNanos, future);
+            })
+        .exceptionally(
+            ex -> {
+              future.completeExceptionally(ex);
+              return null;
+            });
   }
 
   private ResultSet createResultSet(
@@ -106,17 +171,17 @@ class PersistenceBackedPreparedStatement implements PreparedStatement {
     return new InvalidRequestException(format(format, args));
   }
 
-  private List<ByteBuffer> serializeBoundValues(Object[] values) {
-    if (bindMarkerDefinitions.size() != values.length) {
+  private List<ByteBuffer> serializeBoundValues(Object[] values, PreparedInfo info) {
+    if (info.bindMarkerDefinitions.size() != values.length) {
       throw invalid(
           "Unexpected number of values provided: the prepared statement has %d markers "
               + "but %d values provided",
-          bindMarkerDefinitions.size(), values.length);
+          info.bindMarkerDefinitions.size(), values.length);
     }
 
     List<ByteBuffer> serializedValues = new ArrayList<>(values.length);
     for (int i = 0; i < values.length; i++) {
-      Column marker = bindMarkerDefinitions.get(i);
+      Column marker = info.bindMarkerDefinitions.get(i);
       Object value = values[i];
 
       ByteBuffer serialized;
@@ -192,6 +257,16 @@ class PersistenceBackedPreparedStatement implements PreparedStatement {
           "Wrong value provided for %s. Provided type '%s' is not compatible with "
               + "expected CQL type '%s'.%s",
           e.location(), e.providedType(), e.expectedCqlType(), e.errorDetails());
+    }
+  }
+
+  static class PreparedInfo {
+    final MD5Digest id;
+    final List<Column> bindMarkerDefinitions;
+
+    PreparedInfo(Result.Prepared prepared) {
+      this.id = prepared.statementId;
+      this.bindMarkerDefinitions = prepared.metadata.columns;
     }
   }
 }
