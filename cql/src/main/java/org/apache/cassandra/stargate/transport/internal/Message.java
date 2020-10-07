@@ -31,7 +31,7 @@ import io.netty.channel.EventLoop;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.MessageToMessageDecoder;
 import io.netty.handler.codec.MessageToMessageEncoder;
-import io.stargate.db.ClientState;
+import io.stargate.db.ClientInfo;
 import io.stargate.db.ImmutableParameters;
 import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
@@ -57,7 +57,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.cassandra.net.ResourceLimits;
 import org.apache.cassandra.service.ClientWarn;
-import org.apache.cassandra.stargate.db.ConsistencyLevel;
 import org.apache.cassandra.stargate.exceptions.OverloadedException;
 import org.apache.cassandra.stargate.metrics.ClientMetrics;
 import org.apache.cassandra.stargate.transport.ProtocolException;
@@ -213,9 +212,18 @@ public abstract class Message {
     this.customPayload = customPayload;
   }
 
-  public ClientState getClientState() {
+  public Persistence.Connection persistenceConnection() {
     assert connection instanceof ServerConnection;
-    return ((ServerConnection) connection).getClientState();
+    return ((ServerConnection) connection).persistenceConnection();
+  }
+
+  public Persistence persistence() {
+    return persistenceConnection().persistence();
+  }
+
+  public ClientInfo clientInfo() {
+    assert connection instanceof ServerConnection;
+    return ((ServerConnection) connection).clientInfo();
   }
 
   public abstract static class Request extends Message {
@@ -227,8 +235,7 @@ public abstract class Message {
       if (type.direction != Direction.REQUEST) throw new IllegalArgumentException();
     }
 
-    protected abstract CompletableFuture<? extends Response> execute(
-        Persistence persistence, long queryStartNanoTime);
+    protected abstract CompletableFuture<? extends Response> execute(long queryStartNanoTime);
 
     void setTracingRequested() {
       tracingRequested = true;
@@ -240,7 +247,6 @@ public abstract class Message {
 
     protected Parameters makeParameters(QueryOptions options) {
       return ImmutableParameters.builder()
-          .clientState(getClientState())
           .consistencyLevel(options.getConsistency())
           .serialConsistencyLevel(Optional.ofNullable(options.getSerialConsistency()))
           .protocolVersion(options.getProtocolVersion())
@@ -266,9 +272,6 @@ public abstract class Message {
 
     protected Parameters makeParameters() {
       return ImmutableParameters.builder()
-          .clientState(getClientState())
-          .consistencyLevel(ConsistencyLevel.ONE)
-          .protocolVersion(ProtocolVersion.CURRENT)
           .customPayload(Optional.ofNullable(getCustomPayload()))
           .tracingRequested(isTracingRequested())
           .build();
@@ -653,18 +656,17 @@ public abstract class Message {
         assert request.connection() instanceof ServerConnection;
         connection = (ServerConnection) request.connection();
 
-        final Persistence persistence = connection.getPersistence();
+        final Persistence.Connection persistenceConnection = connection.persistenceConnection();
 
         if (connection.getVersion().isGreaterOrEqualTo(ProtocolVersion.V4))
-          persistence.captureClientWarnings();
+          persistenceConnection.captureClientWarnings();
 
         connection.validateNewMessage(request.type, connection.getVersion());
 
         logger.trace("Received: {}, v={}", request, connection.getVersion());
         connection.requests.inc();
 
-        CompletableFuture<? extends Response> req =
-            request.execute(persistence, queryStartNanoTime);
+        CompletableFuture<? extends Response> req = request.execute(queryStartNanoTime);
 
         req.whenComplete(
             (response, err) -> {
@@ -673,7 +675,7 @@ public abstract class Message {
               } else {
                 try {
                   response.setStreamId(request.getStreamId());
-                  response.setWarnings(persistence.getClientWarnings());
+                  response.setWarnings(persistenceConnection.getClientWarnings());
                   response.attach(connection);
                   connection.applyStateTransition(request.type, response.type);
 
@@ -690,7 +692,7 @@ public abstract class Message {
                       t.getMessage(),
                       t);
                 } finally {
-                  persistence.resetClientWarnings();
+                  persistenceConnection.resetClientWarnings();
                 }
               }
             });

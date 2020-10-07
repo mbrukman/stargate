@@ -22,8 +22,6 @@ import graphql.schema.DataFetcher;
 import graphql.schema.DataFetchingEnvironment;
 import io.stargate.auth.AuthenticationService;
 import io.stargate.auth.StoredCredentials;
-import io.stargate.db.ClientState;
-import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
 import io.stargate.db.datastore.DataStore;
 import io.stargate.db.datastore.ResultSet;
@@ -49,8 +47,7 @@ public class AlterTableAddFetcher
 
     String token = httpAwareContext.getAuthToken();
     StoredCredentials storedCredentials = authenticationService.validateToken(token);
-    ClientState clientState = persistence.newClientState(storedCredentials.getRoleName());
-    DataStore dataStore = persistence.newDataStore(Parameters.defaultWith(clientState));
+    DataStore dataStore = DataStore.create(persistence, storedCredentials.getRoleName());
 
     CompletableFuture<ResultSet> resultSetSingle = dataStore.query(getQuery(environment));
     resultSetSingle.get();

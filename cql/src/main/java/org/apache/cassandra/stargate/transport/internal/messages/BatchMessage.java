@@ -21,7 +21,6 @@ import io.netty.buffer.ByteBuf;
 import io.stargate.db.Batch;
 import io.stargate.db.BatchType;
 import io.stargate.db.BoundStatement;
-import io.stargate.db.Persistence;
 import io.stargate.db.Result;
 import io.stargate.db.SimpleStatement;
 import io.stargate.db.Statement;
@@ -118,11 +117,10 @@ public class BatchMessage extends Message.Request {
   }
 
   @Override
-  protected CompletableFuture<? extends Response> execute(
-      Persistence persistence, long queryStartNanoTime) {
-    CompletableFuture<? extends Result> future =
-        persistence.batch(batch, makeParameters(options), queryStartNanoTime);
-    return future.thenApply(result -> new ResultMessage(result));
+  protected CompletableFuture<? extends Response> execute(long queryStartNanoTime) {
+    CompletableFuture<Result> future =
+        persistenceConnection().batch(batch, makeParameters(options), queryStartNanoTime);
+    return future.thenApply(ResultMessage::new);
   }
 
   @Override

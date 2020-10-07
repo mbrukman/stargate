@@ -4,7 +4,6 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import io.stargate.db.BatchType;
-import io.stargate.db.ClientState;
 import io.stargate.db.Parameters;
 import io.stargate.db.Result;
 import io.stargate.db.datastore.common.util.ColumnUtils;
@@ -18,7 +17,6 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import org.apache.cassandra.cql3.ColumnSpecification;
 import org.apache.cassandra.cql3.QueryHandler;
 import org.apache.cassandra.cql3.QueryOptions;
@@ -33,7 +31,6 @@ import org.apache.cassandra.db.marshal.TupleType;
 import org.apache.cassandra.db.marshal.UserType;
 import org.apache.cassandra.exceptions.CassandraException;
 import org.apache.cassandra.locator.InetAddressAndPort;
-import org.apache.cassandra.service.QueryState;
 import org.apache.cassandra.service.pager.PagingState;
 import org.apache.cassandra.stargate.cql3.functions.FunctionName;
 import org.apache.cassandra.stargate.db.ConsistencyLevel;
@@ -63,17 +60,6 @@ public class Conversion {
               }
             });
     TYPE_MAPPINGS = ImmutableMap.copyOf(types);
-  }
-
-  public static QueryState newQueryState(Optional<ClientState> state) {
-    return new QueryState(internalClientState(state));
-  }
-
-  private static org.apache.cassandra.service.ClientState internalClientState(
-      Optional<ClientState> state) {
-    return state
-        .map(c -> (org.apache.cassandra.service.ClientState) c.getWrapped())
-        .orElse(org.apache.cassandra.service.ClientState.forInternalCalls());
   }
 
   public static QueryOptions toInternal(

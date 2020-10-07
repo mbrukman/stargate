@@ -21,8 +21,6 @@ import graphql.schema.DataFetchingEnvironment;
 import graphql.schema.SelectedField;
 import io.stargate.auth.AuthenticationService;
 import io.stargate.auth.StoredCredentials;
-import io.stargate.db.ClientState;
-import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
 import io.stargate.db.datastore.DataStore;
 import io.stargate.db.schema.Column;
@@ -51,8 +49,7 @@ public class KeyspaceFetcher {
 
       String token = httpAwareContext.getAuthToken();
       StoredCredentials storedCredentials = authenticationService.validateToken(token);
-      ClientState clientState = persistence.newClientState(storedCredentials.getRoleName());
-      DataStore dataStore = persistence.newDataStore(Parameters.defaultWith(clientState));
+      DataStore dataStore = DataStore.create(persistence, storedCredentials.getRoleName());
 
       String keyspaceName = environment.getArgument("name");
       Keyspace keyspace = dataStore.schema().keyspace(keyspaceName);
@@ -70,8 +67,7 @@ public class KeyspaceFetcher {
 
       String token = httpAwareContext.getAuthToken();
       StoredCredentials storedCredentials = authenticationService.validateToken(token);
-      ClientState clientState = persistence.newClientState(storedCredentials.getRoleName());
-      DataStore dataStore = persistence.newDataStore(Parameters.defaultWith(clientState));
+      DataStore dataStore = DataStore.create(persistence, storedCredentials.getRoleName());
       return formatResult(dataStore.schema().keyspaces(), environment);
     }
   }

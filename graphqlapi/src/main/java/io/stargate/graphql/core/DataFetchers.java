@@ -37,8 +37,6 @@ import graphql.schema.SelectedField;
 import io.stargate.auth.AuthenticationService;
 import io.stargate.auth.StoredCredentials;
 import io.stargate.auth.UnauthorizedException;
-import io.stargate.db.ClientState;
-import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
 import io.stargate.db.datastore.DataStore;
 import io.stargate.db.datastore.ResultSet;
@@ -89,8 +87,7 @@ public class DataFetchers {
 
       String token = httpAwareContext.getAuthToken();
       StoredCredentials storedCredentials = authenticationService.validateToken(token);
-      ClientState clientState = persistence.newClientState(storedCredentials.getRoleName());
-      DataStore dataStore = persistence.newDataStore(Parameters.defaultWith(clientState));
+      DataStore dataStore = DataStore.create(persistence, storedCredentials.getRoleName());
 
       String statement = buildStatement(table, environment, dataStore);
       return dataStore
@@ -280,8 +277,7 @@ public class DataFetchers {
 
       String token = httpAwareContext.getAuthToken();
       StoredCredentials storedCredentials = authenticationService.validateToken(token);
-      ClientState clientState = persistence.newClientState(storedCredentials.getRoleName());
-      DataStore dataStore = persistence.newDataStore(Parameters.defaultWith(clientState));
+      DataStore dataStore = DataStore.create(persistence, storedCredentials.getRoleName());
 
       CompletableFuture<ResultSet> rs = dataStore.query(statement);
       ResultSet resultSet = rs.get();

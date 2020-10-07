@@ -1,6 +1,5 @@
 package io.stargate.health;
 
-import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
 import io.stargate.db.datastore.DataStore;
 import io.stargate.db.datastore.ResultSet;
@@ -44,7 +43,7 @@ public class BundleService {
 
       try {
         Persistence persistence = (Persistence) context.getService(persistenceReference);
-        DataStore dataStore = persistence.newDataStore(Parameters.DEFAULT);
+        DataStore dataStore = DataStore.create(persistence);
 
         Future<ResultSet> rs =
             dataStore

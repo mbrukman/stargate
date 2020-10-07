@@ -19,7 +19,6 @@ import com.datastax.oss.driver.shaded.guava.common.base.Strings;
 import io.stargate.auth.AuthenticationService;
 import io.stargate.auth.StoredCredentials;
 import io.stargate.auth.UnauthorizedException;
-import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
 import io.stargate.db.datastore.DataStore;
 import io.stargate.db.datastore.ResultSet;
@@ -54,7 +53,7 @@ public class AuthTableBasedService implements AuthenticationService {
 
   public void setPersistence(Persistence persistence) {
     this.persistence = persistence;
-    this.dataStore = persistence.newDataStore(Parameters.DEFAULT);
+    this.dataStore = DataStore.create(persistence);
 
     if (shouldInitializeAuthKeyspace) {
       initAuthTable(this.dataStore);

@@ -90,7 +90,7 @@ class ConversionTest {
   public void testAllDefaultQueryOptionsConversion() {
     // Test a case that uses all non-default options.
     QueryOptions converted =
-        Conversion.toInternal(Collections.emptyList(), null, Parameters.DEFAULT);
+        Conversion.toInternal(Collections.emptyList(), null, Parameters.defaults());
 
     QueryState queryState = QueryState.forInternalCalls();
 

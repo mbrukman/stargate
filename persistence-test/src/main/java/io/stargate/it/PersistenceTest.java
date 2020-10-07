@@ -56,8 +56,6 @@ import com.datastax.oss.driver.api.core.data.TupleValue;
 import com.datastax.oss.driver.shaded.guava.common.collect.ImmutableList;
 import com.datastax.oss.driver.shaded.guava.common.collect.ImmutableMap;
 import com.datastax.oss.driver.shaded.guava.common.collect.ImmutableSet;
-import io.stargate.db.ClientState;
-import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
 import io.stargate.db.datastore.DataStore;
 import io.stargate.db.datastore.ResultSet;
@@ -128,10 +126,8 @@ public abstract class PersistenceTest {
   public void setup(TestInfo testInfo, ClusterConnectionInfo backend) {
     this.backend = backend;
 
-    Persistence persistence = persistence();
-    ClientState clientState = persistence.newClientState("");
-    dataStore = persistence.newDataStore(Parameters.defaultWith(clientState));
-    logger.info("{} {}", clientState, dataStore);
+    dataStore = DataStore.create(persistence());
+    logger.info("{}", dataStore);
 
     Optional<String> name = testInfo.getTestMethod().map(Method::getName);
     assertThat(name).isPresent();

@@ -5,10 +5,10 @@ import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import io.reactivex.Single;
 import io.stargate.db.BatchType;
-import io.stargate.db.ClientState;
 import io.stargate.db.Parameters;
 import io.stargate.db.Result;
 import io.stargate.db.datastore.common.util.ColumnUtils;
+import io.stargate.db.datastore.common.util.UncheckedExecutionException;
 import io.stargate.db.schema.Column;
 import io.stargate.db.schema.ImmutableColumn;
 import io.stargate.db.schema.ImmutableUserDefinedType;
@@ -21,10 +21,7 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import org.apache.cassandra.auth.user.UserRolesAndPermissions;
-import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.cql3.ColumnSpecification;
 import org.apache.cassandra.cql3.PageSize;
 import org.apache.cassandra.cql3.QueryHandler;
@@ -41,7 +38,6 @@ import org.apache.cassandra.db.marshal.SetType;
 import org.apache.cassandra.db.marshal.TupleType;
 import org.apache.cassandra.db.marshal.UserType;
 import org.apache.cassandra.exceptions.CassandraException;
-import org.apache.cassandra.service.QueryState;
 import org.apache.cassandra.service.pager.PagingState;
 import org.apache.cassandra.stargate.cql3.functions.FunctionName;
 import org.apache.cassandra.stargate.db.ConsistencyLevel;
@@ -139,21 +135,6 @@ public class Conversion {
               }
             });
     TYPE_MAPPINGS = ImmutableMap.copyOf(types);
-  }
-
-  public static Single<QueryState> newQueryState(Optional<ClientState> optState) {
-    if (!optState.isPresent()) {
-      return Single.just(QueryState.forInternalCalls());
-    }
-
-    ClientState<org.apache.cassandra.service.ClientState> state = optState.get();
-    if (state.getUser() == null) {
-      return Single.just(new QueryState(state.getWrapped(), UserRolesAndPermissions.ANONYMOUS));
-    } else {
-      return DatabaseDescriptor.getAuthManager()
-          .getUserRolesAndPermissions(state.getUser().getName(), state.getUser().getName())
-          .map(u -> new QueryState(state.getWrapped(), u));
-    }
   }
 
   public static QueryOptions toInternal(
@@ -513,7 +494,11 @@ public class Conversion {
 
   public static <U> CompletableFuture<U> toFuture(Single<U> single) {
     CompletableFuture<U> future = new CompletableFuture<>();
-    single.subscribe(future::complete, future::completeExceptionally);
+    single.subscribe(
+        future::complete,
+        t ->
+            future.completeExceptionally(
+                (t instanceof UncheckedExecutionException) ? t.getCause() : t));
     return future;
   }
 

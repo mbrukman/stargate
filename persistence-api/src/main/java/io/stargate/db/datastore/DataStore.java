@@ -15,11 +15,17 @@
  */
 package io.stargate.db.datastore;
 
+import io.stargate.db.AuthenticatedUser;
+import io.stargate.db.Parameters;
+import io.stargate.db.Persistence;
 import io.stargate.db.datastore.query.QueryBuilder;
 import io.stargate.db.schema.Index;
 import io.stargate.db.schema.Schema;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import org.apache.cassandra.stargate.db.ConsistencyLevel;
 
 /**
@@ -27,8 +33,28 @@ import org.apache.cassandra.stargate.db.ConsistencyLevel;
  * methods we have a fighting chance of being able to unit test without starting C*.
  */
 public interface DataStore {
-  /** The fetch size for SELECT statements */
-  int DEFAULT_ROWS_PER_PAGE = 1000;
+
+  static DataStore create(Persistence.Connection connection, @Nonnull Parameters queryParameters) {
+    Objects.requireNonNull(queryParameters);
+    return new PersistenceBackedDataStore(connection, queryParameters);
+  }
+
+  static DataStore create(
+      Persistence persistence, @Nullable String userName, @Nonnull Parameters queryParameters) {
+    Persistence.Connection connection = persistence.newConnection();
+    if (userName != null && !userName.isEmpty()) {
+      connection.login(AuthenticatedUser.of(userName));
+    }
+    return create(connection, queryParameters);
+  }
+
+  static DataStore create(Persistence persistence, @Nullable String userName) {
+    return create(persistence, userName, Parameters.defaults());
+  }
+
+  static DataStore create(Persistence persistence) {
+    return create(persistence, null);
+  }
 
   /** Create a query using the DSL builder. */
   default QueryBuilder query() {

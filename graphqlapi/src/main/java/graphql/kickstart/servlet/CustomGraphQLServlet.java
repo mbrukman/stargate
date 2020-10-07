@@ -19,7 +19,6 @@ import graphql.kickstart.execution.GraphQLObjectMapper;
 import graphql.schema.GraphQLSchema;
 import io.stargate.auth.AuthenticationService;
 import io.stargate.db.EventListener;
-import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
 import io.stargate.db.datastore.DataStore;
 import io.stargate.db.datastore.ResultSet;
@@ -50,17 +49,17 @@ public class CustomGraphQLServlet extends HttpServlet implements Servlet, EventL
   private static final Logger LOG = LoggerFactory.getLogger(CustomGraphQLServlet.class);
   private static final Pattern KEYSPACE_NAME_PATTERN = Pattern.compile("\\w+");
 
-  private final Persistence<?> persistence;
+  private final Persistence persistence;
   private final AuthenticationService authenticationService;
   private final String defaultKeyspace;
 
   private final ConcurrentMap<String, HttpRequestHandler> keyspaceHandlers;
 
   public CustomGraphQLServlet(
-      Persistence<?> persistence, AuthenticationService authenticationService) {
+      Persistence persistence, AuthenticationService authenticationService) {
     this.persistence = persistence;
     this.authenticationService = authenticationService;
-    DataStore dataStore = persistence.newDataStore(Parameters.DEFAULT);
+    DataStore dataStore = DataStore.create(persistence);
     this.defaultKeyspace = findDefaultKeyspace(dataStore);
     this.keyspaceHandlers = initKeyspaceHandlers(persistence, dataStore, authenticationService);
 
@@ -163,9 +162,7 @@ public class CustomGraphQLServlet extends HttpServlet implements Servlet, EventL
   }
 
   private static ConcurrentMap<String, HttpRequestHandler> initKeyspaceHandlers(
-      Persistence<?> persistence,
-      DataStore dataStore,
-      AuthenticationService authenticationService) {
+      Persistence persistence, DataStore dataStore, AuthenticationService authenticationService) {
 
     ConcurrentMap<String, HttpRequestHandler> map = new ConcurrentHashMap<>();
 
@@ -193,7 +190,7 @@ public class CustomGraphQLServlet extends HttpServlet implements Servlet, EventL
           String.format(reason, reasonArguments));
     }
     try {
-      DataStore dataStore = persistence.newDataStore(Parameters.DEFAULT);
+      DataStore dataStore = DataStore.create(persistence);
       Keyspace keyspace = dataStore.schema().keyspace(keyspaceName);
       keyspaceHandlers.put(
           keyspaceName, buildKeyspaceHandler(keyspace, persistence, authenticationService));
@@ -204,7 +201,7 @@ public class CustomGraphQLServlet extends HttpServlet implements Servlet, EventL
   }
 
   private static HttpRequestHandler buildKeyspaceHandler(
-      Keyspace keyspace, Persistence<?> persistence, AuthenticationService authenticationService) {
+      Keyspace keyspace, Persistence persistence, AuthenticationService authenticationService) {
     GraphQLSchema schema =
         new GqlKeyspaceSchema(persistence, authenticationService, keyspace).build().build();
     GraphQLConfiguration configuration =

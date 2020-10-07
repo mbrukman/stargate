@@ -2,19 +2,18 @@ package io.stargate.db.datastore;
 
 import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
-import io.stargate.db.Result;
 import io.stargate.db.schema.Index;
 import io.stargate.db.schema.Schema;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import org.apache.cassandra.stargate.db.ConsistencyLevel;
 
-public class PersistenceBackedDataStore<C> implements DataStore {
-  private final Persistence<C> persistence;
+class PersistenceBackedDataStore implements DataStore {
+  private final Persistence.Connection connection;
   private final Parameters parameters;
 
-  public PersistenceBackedDataStore(Persistence<C> persistence, Parameters parameters) {
-    this.persistence = persistence;
+  PersistenceBackedDataStore(Persistence.Connection connection, Parameters parameters) {
+    this.connection = connection;
     this.parameters = parameters;
   }
 
@@ -26,29 +25,35 @@ public class PersistenceBackedDataStore<C> implements DataStore {
 
   @Override
   public CompletableFuture<PreparedStatement> prepare(String cql, Optional<Index> index) {
-    return persistence
+    return connection
         .prepare(cql, parameters)
         .thenApply(
-            r -> {
-              assert r instanceof Result.Prepared;
-              Result.Prepared prepared = (Result.Prepared) r;
-              return new PersistenceBackedPreparedStatement(
-                  persistence, parameters, prepared.statementId, prepared.metadata.columns);
-            });
+            prepared ->
+                new PersistenceBackedPreparedStatement(
+                    connection, parameters, prepared.statementId, prepared.metadata.columns));
+  }
+
+  private Persistence persistence() {
+    return connection.persistence();
   }
 
   @Override
   public Schema schema() {
-    return persistence.schema();
+    return persistence().schema();
   }
 
   @Override
   public boolean isInSchemaAgreement() {
-    return persistence.isInSchemaAgreement();
+    return persistence().isInSchemaAgreement();
   }
 
   @Override
   public void waitForSchemaAgreement() {
-    persistence.waitForSchemaAgreement();
+    persistence().waitForSchemaAgreement();
+  }
+
+  @Override
+  public String toString() {
+    return String.format("DataStore[connection=%s, parameters=%s]", connection, parameters);
   }
 }

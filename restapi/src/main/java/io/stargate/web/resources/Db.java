@@ -18,7 +18,6 @@ package io.stargate.web.resources;
 import io.stargate.auth.AuthenticationService;
 import io.stargate.auth.StoredCredentials;
 import io.stargate.auth.UnauthorizedException;
-import io.stargate.db.ClientState;
 import io.stargate.db.ImmutableParameters;
 import io.stargate.db.Parameters;
 import io.stargate.db.Persistence;
@@ -57,40 +56,34 @@ public class Db {
     return tableMetadata;
   }
 
-  public Db(final Persistence<?> persistence, AuthenticationService authenticationService) {
+  public Db(final Persistence persistence, AuthenticationService authenticationService) {
     this.authenticationService = authenticationService;
     this.persistence = persistence;
-    ClientState clientState = persistence.newClientState("");
-    this.dataStore = persistence.newDataStore(Parameters.defaultWith(clientState));
+    this.dataStore = DataStore.create(persistence);
   }
 
   public DataStore getDataStore() {
     return this.dataStore;
   }
 
-  public Persistence<?> getPersistence() {
+  public Persistence getPersistence() {
     return this.persistence;
   }
 
   public DataStore getDataStoreForToken(String token) throws UnauthorizedException {
     StoredCredentials storedCredentials = authenticationService.validateToken(token);
-    ClientState clientState = this.persistence.newClientState(storedCredentials.getRoleName());
-
-    return this.persistence.newDataStore(Parameters.defaultWith(clientState));
+    return DataStore.create(persistence, storedCredentials.getRoleName());
   }
 
   public DataStore getDataStoreForToken(String token, int pageSize, ByteBuffer pagingState)
       throws UnauthorizedException {
     StoredCredentials storedCredentials = authenticationService.validateToken(token);
-    ClientState clientState = this.persistence.newClientState(storedCredentials.getRoleName());
-
     Parameters parameters =
         ImmutableParameters.builder()
-            .clientState(clientState)
             .pageSize(pageSize)
             .pagingState(Optional.ofNullable(pagingState))
             .build();
 
-    return this.persistence.newDataStore(parameters);
+    return DataStore.create(this.persistence, storedCredentials.getRoleName(), parameters);
   }
 }

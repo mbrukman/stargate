@@ -16,7 +16,7 @@ import java.util.NoSuchElementException;
 import java.util.concurrent.ExecutionException;
 
 class PersistenceBackedResultSet implements ResultSet {
-  private final Persistence<?> persistence;
+  private final Persistence.Connection connection;
   private final Parameters parameters;
   private final Statement statement;
   private final ProtocolVersion driverProtocolVersion;
@@ -27,12 +27,12 @@ class PersistenceBackedResultSet implements ResultSet {
   private ByteBuffer nextPagingState;
 
   PersistenceBackedResultSet(
-      Persistence<?> persistence,
+      Persistence.Connection connection,
       Parameters parameters,
       Statement statement,
       ProtocolVersion driverProtocolVersion,
       Result.Rows initialPage) {
-    this.persistence = persistence;
+    this.connection = connection;
     // We get our metadata in our initial page; let's skip it for following pages
     this.parameters = parameters.withoutMetadataInResult();
     this.statement = statement;
@@ -55,7 +55,7 @@ class PersistenceBackedResultSet implements ResultSet {
       // to pull a random number, and adding a new config for that should probably be discussed.
       // But it's probably good enough to rely on the persistence layer query timeout.
       Result result =
-          persistence
+          connection
               .execute(statement, parameters.withPagingState(nextPagingState), System.nanoTime())
               .get();
 

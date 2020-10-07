@@ -25,18 +25,18 @@ import org.apache.cassandra.stargate.transport.ProtocolException;
 import org.apache.cassandra.stargate.utils.MD5Digest;
 
 class PersistenceBackedPreparedStatement implements PreparedStatement {
-  private final Persistence<?> persistence;
+  private final Persistence.Connection connection;
   private final Parameters parameters;
   private final MD5Digest id;
   private final List<Column> bindMarkerDefinitions;
   private final ProtocolVersion driverProtocolVersion;
 
   PersistenceBackedPreparedStatement(
-      Persistence<?> persistence,
+      Persistence.Connection connection,
       Parameters parameters,
       MD5Digest id,
       List<Column> bindMarkerDefinitions) {
-    this.persistence = persistence;
+    this.connection = connection;
     this.parameters = parameters;
     this.id = id;
     this.bindMarkerDefinitions = bindMarkerDefinitions;
@@ -48,7 +48,7 @@ class PersistenceBackedPreparedStatement implements PreparedStatement {
     switch (version) {
       case V1: // fallthrough on purpose
       case V2:
-        // This should like be rejected much sooner but ...
+        // This should likely be rejected much sooner but ...
         throw new ProtocolException("Unsupported protocol version: " + version);
       case V3:
         return ProtocolVersion.V3;
@@ -77,7 +77,7 @@ class PersistenceBackedPreparedStatement implements PreparedStatement {
     List<ByteBuffer> boundValues = serializeBoundValues(values);
     BoundStatement statement = new BoundStatement(id, boundValues, null);
 
-    return persistence
+    return connection
         .execute(statement, executeParameters, queryStartNanos)
         .thenApply(r -> createResultSet(r, statement, executeParameters));
   }
@@ -89,14 +89,14 @@ class PersistenceBackedPreparedStatement implements PreparedStatement {
         throw new AssertionError(
             "Shouldn't get a 'Prepared' result when executing a prepared statement");
       case SchemaChange:
-        persistence.waitForSchemaAgreement();
+        connection.persistence().waitForSchemaAgreement();
         return ResultSet.empty(true);
       case Void: // fallthrough on purpose
       case SetKeyspace:
         return ResultSet.empty();
       case Rows:
         return new PersistenceBackedResultSet(
-            persistence, executeParameters, statement, driverProtocolVersion, (Result.Rows) result);
+            connection, executeParameters, statement, driverProtocolVersion, (Result.Rows) result);
       default:
         throw new AssertionError("Unhandled result type: " + result.kind);
     }
@@ -123,7 +123,7 @@ class PersistenceBackedPreparedStatement implements PreparedStatement {
       if (value == null) {
         serialized = null;
       } else if (value.equals(Parameter.UNSET)) {
-        serialized = persistence.unsetValue();
+        serialized = connection.persistence().unsetValue();
       } else {
         value = validateValue(marker.name(), marker.type(), value, i);
         ColumnType type = marker.type();

@@ -1,9 +1,14 @@
 package io.stargate.db.datastore.common;
 
-import com.google.common.collect.ImmutableMap;
-import io.stargate.db.Parameters;
+import com.google.common.base.Joiner;
+import io.stargate.db.AuthenticatedUser;
+import io.stargate.db.ClientInfo;
 import io.stargate.db.Persistence;
 import io.stargate.db.schema.Schema;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,7 +20,6 @@ import org.slf4j.LoggerFactory;
  * between the persistence layers for various C* versions.
  *
  * @param <Config>
- * @param <ClientState>
  * @param <K> the concrete class for keyspace metadata in the persistence layer.
  * @param <T> the concrete class for table metadata in the persistence layer.
  * @param <C> the concrete class for column metadata in the persistence layer.
@@ -23,8 +27,8 @@ import org.slf4j.LoggerFactory;
  * @param <I> the concrete class for secondary indexes metadata in the persistence layer.
  * @param <V> the concrete class for materialized views metadata in the persistence layer.
  */
-public abstract class AbstractCassandraPersistence<Config, ClientState, K, T, C, U, I, V>
-    implements Persistence<ClientState> {
+public abstract class AbstractCassandraPersistence<Config, K, T, C, U, I, V>
+    implements Persistence {
 
   private static final Logger logger = LoggerFactory.getLogger(AbstractCassandraPersistence.class);
 
@@ -114,21 +118,50 @@ public abstract class AbstractCassandraPersistence<Config, ClientState, K, T, C,
     unregisterInternalSchemaListener();
   }
 
-  /**
-   * A builder for tracing parameters populated with the default parameters for executing a query
-   * (everything that is common to prepared and non-prepared queries).
-   */
-  protected static ImmutableMap.Builder<String, String> defaultQueryTraceParameters(
-      String query, Parameters parameters) {
-    ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
-    builder.put("query", query);
-    if (parameters.pageSize().isPresent()) {
-      builder.put("page_size", Integer.toString(parameters.pageSize().getAsInt()));
+  @Override
+  public String toString() {
+    return name();
+  }
+
+  protected abstract static class AbstractConnection implements Connection {
+    private final @Nullable ClientInfo clientInfo;
+    private volatile @Nullable AuthenticatedUser loggedUser;
+
+    protected AbstractConnection(@Nullable ClientInfo clientInfo) {
+      this.clientInfo = clientInfo;
     }
-    builder.put("consistency_level", parameters.consistencyLevel().name());
-    if (parameters.serialConsistencyLevel().isPresent()) {
-      builder.put("serial_consistency_level", parameters.serialConsistencyLevel().get().name());
+
+    @Override
+    public Optional<ClientInfo> clientInfo() {
+      return Optional.ofNullable(clientInfo);
     }
-    return builder;
+
+    protected abstract void loginInternally(AuthenticatedUser user);
+
+    @Override
+    public void login(AuthenticatedUser user) {
+      // Note that we do the actual login first, so that if it fails, loggedUser remains null
+      loginInternally(user);
+      this.loggedUser = user;
+    }
+
+    @Override
+    public Optional<AuthenticatedUser> loggedUser() {
+      return Optional.ofNullable(loggedUser);
+    }
+
+    @Override
+    public String toString() {
+      Map<String, String> params = new LinkedHashMap<>();
+      params.put("persistence", persistence().toString());
+      if (clientInfo != null) {
+        params.put("client", clientInfo.toString());
+      }
+      if (loggedUser != null) {
+        params.put("logged", loggedUser.name());
+      }
+      return String.format(
+          "Connection[%s]", Joiner.on(",").withKeyValueSeparator("=").join(params));
+    }
   }
 }

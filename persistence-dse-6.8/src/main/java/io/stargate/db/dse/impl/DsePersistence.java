@@ -1,6 +1,5 @@
 package io.stargate.db.dse.impl;
 
-import com.google.common.base.Strings;
 import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import com.google.common.util.concurrent.Uninterruptibles;
@@ -8,8 +7,10 @@ import io.reactivex.Single;
 import io.stargate.db.Authenticator;
 import io.stargate.db.Batch;
 import io.stargate.db.BoundStatement;
+import io.stargate.db.ClientInfo;
 import io.stargate.db.EventListener;
 import io.stargate.db.Parameters;
+import io.stargate.db.Persistence;
 import io.stargate.db.Result;
 import io.stargate.db.SimpleStatement;
 import io.stargate.db.Statement;
@@ -17,25 +18,28 @@ import io.stargate.db.datastore.common.AbstractCassandraPersistence;
 import io.stargate.db.dse.impl.interceptors.DefaultQueryInterceptor;
 import io.stargate.db.dse.impl.interceptors.ProxyProtocolQueryInterceptor;
 import io.stargate.db.dse.impl.interceptors.QueryInterceptor;
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import org.apache.cassandra.auth.AuthenticatedUser;
+import org.apache.cassandra.auth.user.UserRolesAndPermissions;
 import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.cql3.QueryOptions;
 import org.apache.cassandra.cql3.statements.BatchStatement;
 import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.marshal.UserType;
+import org.apache.cassandra.exceptions.AuthenticationException;
 import org.apache.cassandra.gms.ApplicationState;
 import org.apache.cassandra.gms.EndpointState;
 import org.apache.cassandra.gms.Gossiper;
@@ -67,7 +71,6 @@ import org.slf4j.LoggerFactory;
 public class DsePersistence
     extends AbstractCassandraPersistence<
         Config,
-        org.apache.cassandra.service.ClientState,
         KeyspaceMetadata,
         TableMetadata,
         ColumnMetadata,
@@ -220,139 +223,23 @@ public class DsePersistence
   }
 
   @Override
-  public io.stargate.db.ClientState<ClientState> newClientState(
-      SocketAddress remoteAddress, InetSocketAddress publicAddress) {
-    if (remoteAddress == null) {
-      throw new IllegalArgumentException("No remote address provided");
-    }
-
-    if (authenticator.requireAuthentication()) {
-      return ClientStateWrapper.forExternalCalls(remoteAddress, publicAddress);
-    }
-
-    assert remoteAddress instanceof InetSocketAddress;
-    return ClientStateWrapper.forExternalCalls(
-        AuthenticatedUser.ANONYMOUS_USER, (InetSocketAddress) remoteAddress, publicAddress);
-  }
-
-  @Override
-  public io.stargate.db.ClientState newClientState(String name) {
-    if (Strings.isNullOrEmpty(name)) return ClientStateWrapper.forInternalCalls();
-
-    ClientStateWrapper state = ClientStateWrapper.forExternalCalls(null);
-    state.login(new AuthenticatorWrapper.AuthenticatedUserWrapper(new AuthenticatedUser(name)));
-    return state;
-  }
-
-  @Override
-  public io.stargate.db.AuthenticatedUser<?> newAuthenticatedUser(String name) {
-    return new AuthenticatorWrapper.AuthenticatedUserWrapper(new AuthenticatedUser(name));
-  }
-
-  @Override
   public Authenticator getAuthenticator() {
     return authenticator;
   }
 
   @Override
+  public Connection newConnection(ClientInfo clientInfo) {
+    return new DseConnection(clientInfo);
+  }
+
+  @Override
+  public Connection newConnection() {
+    return new DseConnection();
+  }
+
+  @Override
   public ByteBuffer unsetValue() {
     return ByteBufferUtil.UNSET_BYTE_BUFFER;
-  }
-
-  private CompletableFuture<Result> executeRequest(
-      Parameters parameters,
-      long queryStartNanoTime,
-      org.apache.cassandra.transport.ProtocolVersion protocolVersion,
-      Supplier<Request> requestSupplier) {
-
-    Single<QueryState> queryState = Conversion.newQueryState(parameters.clientState());
-    Request request = requestSupplier.get();
-    if (parameters.tracingRequested()) {
-      request.setTracingRequested();
-    }
-    request.setCustomPayload(parameters.customPayload().orElse(null));
-
-    return Conversion.toFuture(
-        request
-            .execute(queryState, queryStartNanoTime)
-            .map(
-                response -> {
-                  // There is only 2 types of response that can come out: either a ResutMessage
-                  // (which
-                  // itself can of different kind), or an ErrorMessage.
-                  if (response instanceof ErrorMessage) {
-                    throw new UncheckedExecutionException(
-                        Conversion.convertInternalException(
-                            (Throwable) ((ErrorMessage) response).error));
-                  }
-
-                  return Conversion.toResult((ResultMessage) response, protocolVersion);
-                }));
-  }
-
-  @Override
-  public CompletableFuture<Result> execute(
-      Statement statement, Parameters parameters, long queryStartNanoTime) {
-
-    QueryOptions options =
-        Conversion.toInternal(statement.values(), statement.boundNames().orElse(null), parameters);
-    return executeRequest(
-        parameters,
-        queryStartNanoTime,
-        options.getProtocolVersion(),
-        () -> {
-          if (statement instanceof SimpleStatement) {
-            String queryString = ((SimpleStatement) statement).queryString();
-            return new QueryMessage(queryString, options);
-          } else {
-            org.apache.cassandra.utils.MD5Digest id =
-                Conversion.toInternal(((BoundStatement) statement).preparedId());
-            // The 'resultMetadataId' is a protocol v5 feature we don't yet support
-            return new ExecuteMessage(id, null, options);
-          }
-        });
-  }
-
-  @Override
-  public CompletableFuture<? extends Result> prepare(String query, Parameters parameters) {
-    return executeRequest(
-        parameters,
-        // The queryStartNanoTime is not used by prepared message, so it doesn't really matter
-        // that it's only computed now.
-        System.nanoTime(),
-        // This is unused, so we don't bother converting it (but it would trivial to).
-        null,
-        () -> new PrepareMessage(query, parameters.defaultKeyspace().orElse(null)));
-  }
-
-  @Override
-  public CompletableFuture<? extends Result> batch(
-      Batch batch, Parameters parameters, long queryStartNanoTime) {
-
-    QueryOptions options = Conversion.toInternal(Collections.emptyList(), null, parameters);
-    return executeRequest(
-        parameters,
-        queryStartNanoTime,
-        options.getProtocolVersion(),
-        () -> {
-          BatchStatement.Type internalBatchType = Conversion.toInternal(batch.type());
-          List<Object> queryOrIdList = new ArrayList<>(batch.size());
-          List<List<ByteBuffer>> allValues = new ArrayList<>(batch.size());
-
-          for (Statement statement : batch.statements()) {
-            queryOrIdList.add(queryOrId(statement));
-            allValues.add(statement.values());
-          }
-          return new BatchMessage(internalBatchType, queryOrIdList, allValues, options);
-        });
-  }
-
-  private static Object queryOrId(Statement statement) {
-    if (statement instanceof SimpleStatement) {
-      return ((SimpleStatement) statement).queryString();
-    } else {
-      return Conversion.toInternal(((BoundStatement) statement).preparedId());
-    }
   }
 
   @Override
@@ -378,21 +265,6 @@ public class DsePersistence
         <= 1;
   }
 
-  @Override
-  public void captureClientWarnings() {
-    ClientWarn.instance.captureWarnings();
-  }
-
-  @Override
-  public List<String> getClientWarnings() {
-    return ClientWarn.instance.getWarnings();
-  }
-
-  @Override
-  public void resetClientWarnings() {
-    ClientWarn.instance.resetWarnings();
-  }
-
   /**
    * When "cassandra.join_ring" is "false" {@link StorageService#initServer()} will not wait for
    * schema to propagate to the coordinator only node. This method fixes that limitation by waiting
@@ -415,6 +287,180 @@ public class DsePersistence
       logger.warn(
           "Unable to connect to live token owner and/or reach schema agreement after {} milliseconds",
           delayMillis);
+    }
+  }
+
+  private static ClientState clientStateForExternalCalls(@Nonnull ClientInfo clientInfo) {
+    if (clientInfo.publicAddress().isPresent()) {
+      new ClientStateWithPublicAddress(
+          clientInfo.remoteAddress(), clientInfo.publicAddress().get());
+    }
+    return ClientState.forExternalCalls(clientInfo.remoteAddress(), null);
+  }
+
+  private class DseConnection extends AbstractConnection {
+    private final ClientState clientState;
+
+    private DseConnection(@Nonnull ClientInfo clientInfo) {
+      this(clientInfo, clientStateForExternalCalls(clientInfo));
+    }
+
+    private DseConnection() {
+      this(null, ClientState.forInternalCalls());
+    }
+
+    private DseConnection(@Nullable ClientInfo clientInfo, ClientState clientState) {
+      super(clientInfo);
+      this.clientState = clientState;
+
+      if (!authenticator.requireAuthentication()) {
+        clientState.login(AuthenticatedUser.ANONYMOUS_USER);
+      }
+    }
+
+    @Override
+    public Persistence persistence() {
+      return DsePersistence.this;
+    }
+
+    @Override
+    protected void loginInternally(io.stargate.db.AuthenticatedUser user) {
+      try {
+        // For now, we're blocking as the login() API is synchronous. If this is a problem, we may
+        // have to make said API asynchronous, but it makes things a tad more complex.
+        clientState.login(new AuthenticatedUser(user.name())).blockingGet();
+      } catch (AuthenticationException e) {
+        throw new org.apache.cassandra.stargate.exceptions.AuthenticationException(e);
+      }
+    }
+
+    @Override
+    public Optional<String> usedKeyspace() {
+      return Optional.ofNullable(clientState.getRawKeyspace());
+    }
+
+    private Single<QueryState> newQueryState() {
+      if (clientState.getUser() == null) {
+        return Single.just(new QueryState(clientState, UserRolesAndPermissions.ANONYMOUS));
+      } else {
+        return DatabaseDescriptor.getAuthManager()
+            .getUserRolesAndPermissions(
+                clientState.getUser().getName(), clientState.getUser().getName())
+            .map(u -> new QueryState(clientState, u));
+      }
+    }
+
+    private <T extends Result> CompletableFuture<T> executeRequest(
+        Parameters parameters, long queryStartNanoTime, Supplier<Request> requestSupplier) {
+
+      try {
+        Single<QueryState> queryState = newQueryState();
+        Request request = requestSupplier.get();
+        if (parameters.tracingRequested()) {
+          request.setTracingRequested();
+        }
+        request.setCustomPayload(parameters.customPayload().orElse(null));
+
+        return Conversion.toFuture(
+            request
+                .execute(queryState, queryStartNanoTime)
+                .map(
+                    response -> {
+                      // There is only 2 types of response that can come out: either a ResutMessage
+                      // (which itself can of different kind), or an ErrorMessage.
+                      if (response instanceof ErrorMessage) {
+                        throw new UncheckedExecutionException(
+                            Conversion.convertInternalException(
+                                (Throwable) ((ErrorMessage) response).error));
+                      }
+
+                      return (T)
+                          Conversion.toResult(
+                              (ResultMessage) response,
+                              Conversion.toInternal(parameters.protocolVersion()));
+                    }));
+      } catch (Exception e) {
+        CompletableFuture<T> exceptionalFuture = new CompletableFuture<>();
+        exceptionalFuture.completeExceptionally(Conversion.convertInternalException(e));
+        return exceptionalFuture;
+      }
+    }
+
+    @Override
+    public CompletableFuture<Result> execute(
+        Statement statement, Parameters parameters, long queryStartNanoTime) {
+      return executeRequest(
+          parameters,
+          queryStartNanoTime,
+          () -> {
+            QueryOptions options =
+                Conversion.toInternal(
+                    statement.values(), statement.boundNames().orElse(null), parameters);
+
+            if (statement instanceof SimpleStatement) {
+              String queryString = ((SimpleStatement) statement).queryString();
+              return new QueryMessage(queryString, options);
+            } else {
+              org.apache.cassandra.utils.MD5Digest id =
+                  Conversion.toInternal(((BoundStatement) statement).preparedId());
+              // The 'resultMetadataId' is a protocol v5 feature we don't yet support
+              return new ExecuteMessage(id, null, options);
+            }
+          });
+    }
+
+    @Override
+    public CompletableFuture<Result.Prepared> prepare(String query, Parameters parameters) {
+      return executeRequest(
+          parameters,
+          // The queryStartNanoTime is not used by prepared message, so it doesn't really matter
+          // that it's only computed now.
+          System.nanoTime(),
+          () -> new PrepareMessage(query, parameters.defaultKeyspace().orElse(null)));
+    }
+
+    @Override
+    public CompletableFuture<Result> batch(
+        Batch batch, Parameters parameters, long queryStartNanoTime) {
+
+      return executeRequest(
+          parameters,
+          queryStartNanoTime,
+          () -> {
+            QueryOptions options = Conversion.toInternal(Collections.emptyList(), null, parameters);
+            BatchStatement.Type internalBatchType = Conversion.toInternal(batch.type());
+            List<Object> queryOrIdList = new ArrayList<>(batch.size());
+            List<List<ByteBuffer>> allValues = new ArrayList<>(batch.size());
+
+            for (Statement statement : batch.statements()) {
+              queryOrIdList.add(queryOrId(statement));
+              allValues.add(statement.values());
+            }
+            return new BatchMessage(internalBatchType, queryOrIdList, allValues, options);
+          });
+    }
+
+    private Object queryOrId(Statement statement) {
+      if (statement instanceof SimpleStatement) {
+        return ((SimpleStatement) statement).queryString();
+      } else {
+        return Conversion.toInternal(((BoundStatement) statement).preparedId());
+      }
+    }
+
+    @Override
+    public void captureClientWarnings() {
+      ClientWarn.instance.captureWarnings();
+    }
+
+    @Override
+    public List<String> getClientWarnings() {
+      return ClientWarn.instance.getWarnings();
+    }
+
+    @Override
+    public void resetClientWarnings() {
+      ClientWarn.instance.resetWarnings();
     }
   }
 }

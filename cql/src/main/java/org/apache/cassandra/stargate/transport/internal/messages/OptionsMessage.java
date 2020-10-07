@@ -18,7 +18,6 @@
 package org.apache.cassandra.stargate.transport.internal.messages;
 
 import io.netty.buffer.ByteBuf;
-import io.stargate.db.Persistence;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -50,8 +49,7 @@ public class OptionsMessage extends Message.Request {
   }
 
   @Override
-  protected CompletableFuture<? extends Response> execute(
-      Persistence persistence, long queryStartNanoTime) {
+  protected CompletableFuture<? extends Response> execute(long queryStartNanoTime) {
     List<String> cqlVersions = new ArrayList<>();
     cqlVersions.add(QueryProcessor.CQL_VERSION.toString());
 
