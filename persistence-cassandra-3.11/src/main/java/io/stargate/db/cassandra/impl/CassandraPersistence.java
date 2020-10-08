@@ -123,7 +123,7 @@ public class CassandraPersistence
   }
 
   private StargateQueryHandler stargateHandler() {
-    return (StargateQueryHandler) org.apache.cassandra.service.ClientState.getCQLQueryHandler();
+    return (StargateQueryHandler) ClientState.getCQLQueryHandler();
   }
 
   @Override

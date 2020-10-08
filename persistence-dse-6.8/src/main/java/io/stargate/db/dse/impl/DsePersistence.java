@@ -106,7 +106,7 @@ public class DsePersistence
   }
 
   private StargateQueryHandler stargateHandler() {
-    return (StargateQueryHandler) org.apache.cassandra.service.ClientState.getCQLQueryHandler();
+    return (StargateQueryHandler) ClientState.getCQLQueryHandler();
   }
 
   @Override

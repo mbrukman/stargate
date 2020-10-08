@@ -542,7 +542,7 @@ public class Conversion {
     return type;
   }
 
-  public static List<Column> getUDTColumns(org.apache.cassandra.db.marshal.UserType userType) {
+  public static List<Column> getUDTColumns(UserType userType) {
     List<Column> columns = new ArrayList<>(userType.fieldTypes().size());
     for (int i = 0; i < userType.fieldTypes().size(); i++) {
       columns.add(

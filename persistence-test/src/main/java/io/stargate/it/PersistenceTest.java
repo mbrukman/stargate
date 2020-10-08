@@ -885,9 +885,9 @@ public abstract class PersistenceTest {
     ResultSet resultSet = dataStore.query().select().star().from(keyspace, table).execute();
 
     Iterator<Row> it = resultSet.iterator();
-    iterateOverResults(resultSet, it, knownValues, pageSize); // page 1
-    iterateOverResults(resultSet, it, knownValues, pageSize); // page 2
-    iterateOverResults(resultSet, it, knownValues, 3); // page 3
+    iterateOverResults(it, knownValues, pageSize); // page 1
+    iterateOverResults(it, knownValues, pageSize); // page 2
+    iterateOverResults(it, knownValues, 3); // page 3
 
     assertThat(it).isExhausted();
 
@@ -895,8 +895,7 @@ public abstract class PersistenceTest {
     assertThat(knownValues).isEmpty();
   }
 
-  private void iterateOverResults(
-      ResultSet resultSet, Iterator<Row> it, Set<Integer> knownValues, int pageSize) {
+  private void iterateOverResults(Iterator<Row> it, Set<Integer> knownValues, int pageSize) {
     for (int i = 1; i <= pageSize; i++) {
       assertThat(knownValues.remove(it.next().getInt("a"))).isTrue();
     }
